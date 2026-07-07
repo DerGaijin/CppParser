@@ -1,0 +1,12 @@
+#Visual Studio Stuff
+/.vs/
+
+# Binaries
+/Bin/
+/Bin-Int/
+
+# Visual Studio Solution Files
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user

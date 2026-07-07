@@ -1,0 +1,24 @@
+#pragma once
+#include <string>
+
+
+class Test
+{
+public:
+	const volatile std::basic_string<wchar_t> MemberVariable1;
+	const volatile std::basic_string<wchar_t>* MemberVariable2;
+	const volatile std::basic_string<wchar_t>& MemberVariable3;
+	volatile const std::basic_string<wchar_t, int>** MemberVariable4;
+	volatile const volatile std::basic_string<wchar_t, std::char_traits<wchar_t>>**& MemberVariable5;
+	mutable const const volatile std::basic_string<wchar_t>&& MemberVariable6;
+	volatile const const volatile std::basic_string<wchar_t>**&& MemberVariable7;
+	static volatile const const volatile std::basic_string<wchar_t>**&& MemberVariable8;
+	volatile const static const volatile std::basic_string<wchar_t>**&& MemberVariable9;
+	volatile const static const volatile std::basic_string<wchar_t> const* const mutable volatile* mutable* const&& MemberVariable10;
+	std::basic_string<wchar_t>::pointer MemberVariable11;
+	class std::basic_string<wchar_t> MemberVariable12;
+	class Unknown const* MemberVariable13;
+	typename std::basic_string<wchar_t>::pointer MemberVariable14;
+	static thread_local double MemberVariable15;
+	const class __declspec(dllexport) Testing {} MemberVariable16;
+};
