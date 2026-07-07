@@ -10,7 +10,7 @@ using namespace CE;
 int main()
 {
 	ParseManager<PrintParser> PM;
-	PM.ParseSystemIncludes = true;
+	PM.ParseSystemIncludes = false;
 	PM.SetupEnvironment();
 	PM.AddFile("TestFile_01");
 	PM.Definitions["CE_API"] = PreprocessorDefinition::Create({}, L"");
