@@ -10,3 +10,6 @@
 *.vcxproj
 *.vcxproj.filters
 *.vcxproj.user
+
+# Open Code
+.opencode/

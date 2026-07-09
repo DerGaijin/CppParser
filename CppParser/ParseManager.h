@@ -62,7 +62,6 @@ namespace CE
 			Definitions[L"_HAS_STATIC_RTTI"] = PreprocessorDefinition::Create({}, L"1");
 			Definitions[L"_M_IX86"] = PreprocessorDefinition::Create({}, L"600");
 			Definitions[L"__cdecl"] = PreprocessorDefinition::Create({}, L"");
-			Definitions[L"__declspec"] = PreprocessorDefinition::Create({ L"x" }, L"");
 			Definitions[L"__pragma"] = PreprocessorDefinition::Create({ L"x" }, L"");
 
 			Definitions[L"_In_"] = PreprocessorDefinition::Create({}, L"");
