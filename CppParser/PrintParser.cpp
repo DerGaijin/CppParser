@@ -38,6 +38,10 @@ namespace CE
 			if (Index > 0)
 			{
 				m_Output << L"::";
+				if (Namespaces[Index].IsInline)
+				{
+					m_Output << L"inline ";
+				}
 			}
 			m_Output << FormatName(Namespaces[Index].Name);
 		}
