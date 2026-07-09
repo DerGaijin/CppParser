@@ -41,7 +41,6 @@ namespace CE
 	{
 		String Name;
 		Array<ParsedTemplateArgument> TemplateArguments;
-		bool IsInline = false;
 	};
 
 	struct ParsedName

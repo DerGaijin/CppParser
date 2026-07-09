@@ -16,7 +16,7 @@ namespace CE
 
 
 	protected:
-		virtual bool OnParsed_Namespace(const ParsedNamespace& Namespace) { return true; }
+		virtual bool OnParsed_Namespace(const Array<ParsedNamespace>& Namespaces) { return true; }
 		virtual bool OnParsed_Class(const ParsedClass& Class) { return true; }
 		virtual bool OnParsed_AccessSpecifier(EAccessSpecifier Access) { return true; }
 		virtual bool OnParsed_Variable(const ParsedVariable& Variable) { return true; }

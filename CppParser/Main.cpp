@@ -12,7 +12,7 @@ int main()
 	ParseManager<PrintParser> PM;
 	PM.ParseSystemIncludes = false;
 	PM.SetupEnvironment();
-	PM.AddFile("TestFile_01");
+	PM.AddFile("TestFile_02");
 	PM.Definitions["CE_API"] = PreprocessorDefinition::Create({}, L"");
 
 	std::wofstream ResultFile("Result.hpp");

@@ -1,24 +1,56 @@
 #pragma once
-#include <string>
 
+// Namespaces
+namespace TestNamespace1 {}
+namespace {}
+inline namespace TestNamespace1 {}
+inline namespace {}
+namespace TestNamespace2 { namespace TestNamespace3 {} }
+namespace TestNamespace4::TestNamespace5::TestNamespace6 {}
+namespace TestNamespace7::inline TestNamespace8::inline TestNamespace9 {}
 
-class Test
+// Namespace Alias
+namespace TestNamespace10 = TestNamespace1;
+namespace TestNamespace11 = ::TestNamespace1;
+namespace TestNamespace12 = TestNamespace2::TestNamespace3;
+
+class SimpleClass
 {
 public:
-	const volatile std::basic_string<wchar_t> MemberVariable1;
-	const volatile std::basic_string<wchar_t>* MemberVariable2;
-	const volatile std::basic_string<wchar_t>& MemberVariable3;
-	volatile const std::basic_string<wchar_t, int>** MemberVariable4;
-	volatile const volatile std::basic_string<wchar_t, std::char_traits<wchar_t>>**& MemberVariable5;
-	mutable const const volatile std::basic_string<wchar_t>&& MemberVariable6;
-	volatile const const volatile std::basic_string<wchar_t>**&& MemberVariable7;
-	static volatile const const volatile std::basic_string<wchar_t>**&& MemberVariable8;
-	volatile const static const volatile std::basic_string<wchar_t>**&& MemberVariable9;
-	volatile const static const volatile std::basic_string<wchar_t> const* const mutable volatile* mutable* const&& MemberVariable10;
-	std::basic_string<wchar_t>::pointer MemberVariable11;
-	class std::basic_string<wchar_t> MemberVariable12;
-	class Unknown const* MemberVariable13;
-	typename std::basic_string<wchar_t>::pointer MemberVariable14;
-	static thread_local double MemberVariable15;
-	const class __declspec(dllexport) Testing {} MemberVariable16;
+
+
+};
+
+
+// Extended Class
+class __declspec(dllexport) TestClass1
+{
+public:
+};
+
+
+// Template Class
+class TestClass2
+{
+public:
+protected:
+private:
+};
+
+// Class/Struct Without Name
+struct
+{
+
+};
+
+// Align As
+struct AS1 final {};
+struct alignas(2) AS2 final {};
+
+// Enum
+enum class TestEnum : int
+{
+	Value01,
+	Value02 = 1,
+	Value03 = 1 + 2 << 23,
 };
