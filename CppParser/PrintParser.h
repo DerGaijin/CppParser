@@ -14,15 +14,21 @@ namespace CE
 	protected:
 		virtual void OnParseBegin() override;
 		virtual bool OnParsed_Namespace(const Array<ParsedNamespace>& Namespaces) override;
+		virtual bool OnParsed_NamespaceAlias(const ParsedNamespaceAlias& NamespaceAlias) override;
 		virtual bool OnParsed_Class(const ParsedClass& Class) override;
 		virtual bool OnParsed_AccessSpecifier(EAccessSpecifier Access) override;
 		virtual bool OnParsed_Variable(const ParsedVariable& Variable) override;
+		virtual bool OnParsed_Concept(const ParsedConcept& Concept) override;
+		virtual bool OnParsed_Decltype(const ParsedDecltype& Decltype) override;
 		virtual bool OnParsed_Function(const ParsedFunction& Function) override;
+		virtual bool OnParsed_Constructor(const ParsedConstructor& Constructor) override;
+		virtual bool OnParsed_Destructor(const ParsedDestructor& Destructor) override;
 		virtual bool OnParsed_Enum(const ParsedEnum& Enum) override;
 		virtual bool OnParsed_EnumValue(const ParsedEnumValue& Value) override;
 		virtual bool OnParsed_ScopeEnd() override;
 		virtual bool OnParsed_TemplateDeclaration(const ParsedTemplateDeclaration& Template) override;
 		virtual bool OnParsed_UsingTypedef(const ParsedUsingTypedef& UsingTypedef) override;
+		virtual bool OnParsed_Using(const ParsedUsing& Using) override;
 
 
 	private:
@@ -43,7 +49,8 @@ namespace CE
 		std::wstring FormatParameter(const ParsedParameter& Parameter) const;
 		std::wstring FormatTemplateParameter(const ParsedTemplateParameter& Parameter) const;
 
-		void PrintIndent();
+		void PrintFunctionPrefix(const WChar* FunctionName);
+		void PrintIndent(const WChar* FunctionName = nullptr);
 
 
 	private:

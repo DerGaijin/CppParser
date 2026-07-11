@@ -76,6 +76,7 @@ namespace CE
 		EKind Kind = EKind::Pointer;
 		bool IsConst = false;
 		bool IsVolatile = false;
+		bool IsMutable = false;
 	};
 
 	struct ParsedType
@@ -99,6 +100,13 @@ namespace CE
 		bool IsInline = false;
 	};
 
+	struct ParsedNamespaceAlias
+	{
+		ParsedName Name;
+		ParsedName Target;
+		Array<ParsedAttribute> Attributes;
+	};
+
 	struct ParsedBaseClass
 	{
 		ParsedType Type;
@@ -115,6 +123,7 @@ namespace CE
 		bool IsFinal = false;
 		bool HasDefinition = false;
 		bool IsForward = false;
+		bool IsFriend = false;
 	};
 
 	struct ParsedVariable
@@ -134,6 +143,28 @@ namespace CE
 		bool IsBitfield = false;
 	};
 
+	struct ParsedConcept
+	{
+		String Name;
+		ParsedExpression Constraint;
+		Array<ParsedAttribute> Attributes;
+	};
+
+	struct ParsedDecltype
+	{
+		ParsedExpression Expression;
+		String Name;
+		ParsedExpression Initializer;
+		Array<ParsedAttribute> Attributes;
+		bool HasInitializer = false;
+		bool IsConstexpr = false;
+		bool IsConsteval = false;
+		bool IsStatic = false;
+		bool IsThreadLocal = false;
+		bool IsMutable = false;
+		bool IsExtern = false;
+	};
+
 	struct ParsedParameter
 	{
 		ParsedType Type;
@@ -145,6 +176,13 @@ namespace CE
 
 	struct ParsedFunction
 	{
+		enum class EType
+		{
+			Function,
+			Constructor,
+			Destructor,
+		};
+
 		enum class ERefQual : uint8
 		{
 			None,
@@ -152,6 +190,7 @@ namespace CE
 			RValue,
 		};
 
+		EType Type = EType::Function;
 		ParsedType ReturnType;
 		ParsedName Name;
 		Array<ParsedParameter> Parameters;
@@ -177,6 +216,54 @@ namespace CE
 		bool HasDefinition = false;
 		bool IsFriend = false;
 		bool IsVariadic = false;
+	};
+
+	struct ParsedConstructor
+	{
+		ParsedName Name;
+		Array<ParsedParameter> Parameters;
+		Array<ParsedAttribute> Attributes;
+		ParsedExpression NoExceptExpression;
+		ParsedExpression DeletedMessage;
+		ParsedExpression RequiresClause;
+		ParsedFunction::ERefQual RefQualifier = ParsedFunction::ERefQual::None;
+		bool IsExplicit = false;
+		bool IsVirtual = false;
+		bool IsOverride = false;
+		bool IsFinal = false;
+		bool IsPure = false;
+		bool IsInline = false;
+		bool IsConstexpr = false;
+		bool IsConsteval = false;
+		bool IsNoExcept = false;
+		bool IsDeleted = false;
+		bool IsDefaulted = false;
+		bool HasDefinition = false;
+		bool IsFriend = false;
+		bool IsVariadic = false;
+	};
+
+	struct ParsedDestructor
+	{
+		ParsedName Name;
+		Array<ParsedParameter> Parameters;
+		Array<ParsedAttribute> Attributes;
+		ParsedExpression NoExceptExpression;
+		ParsedExpression DeletedMessage;
+		ParsedExpression RequiresClause;
+		ParsedFunction::ERefQual RefQualifier = ParsedFunction::ERefQual::None;
+		bool IsVirtual = false;
+		bool IsOverride = false;
+		bool IsFinal = false;
+		bool IsPure = false;
+		bool IsInline = false;
+		bool IsConstexpr = false;
+		bool IsConsteval = false;
+		bool IsNoExcept = false;
+		bool IsDeleted = false;
+		bool IsDefaulted = false;
+		bool HasDefinition = false;
+		bool IsFriend = false;
 	};
 
 	struct ParsedEnum
@@ -237,6 +324,25 @@ namespace CE
 	};
 
 	struct ParsedUsingTypedef
+	{
+		enum class EKind : uint8
+		{
+			Typedef,
+			AliasDeclaration,
+			NamespaceAlias,
+			UsingDeclaration,
+			UsingDirective,
+			UsingEnum,
+		};
+
+		EKind Kind = EKind::Typedef;
+		ParsedType Type;
+		ParsedName Name;
+		ParsedName Target;
+		Array<ParsedAttribute> Attributes;
+	};
+
+	struct ParsedUsing
 	{
 		enum class EKind : uint8
 		{

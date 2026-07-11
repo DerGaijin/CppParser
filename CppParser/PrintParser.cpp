@@ -13,12 +13,18 @@ namespace CE
 	{
 		std::wstring FileName = CurrentFile().wstring();
 		std::wstring Border(FileName.size(), '=');
-		m_Output << "\n// " << Border << "\n// " << FileName << "\n// " << Border << "\n\n";
+		m_Output << L"\n// ";
+		PrintFunctionPrefix(L"OnParseBegin");
+		m_Output << Border << L"\n// ";
+		PrintFunctionPrefix(L"OnParseBegin");
+		m_Output << FileName << L"\n// ";
+		PrintFunctionPrefix(L"OnParseBegin");
+		m_Output << Border << L"\n\n";
 	}
 
 	bool PrintParser::OnParsed_Namespace(const Array<ParsedNamespace>& Namespaces)
 	{
-		PrintIndent();
+		PrintIndent(L"OnParsed_Namespace");
 		if (Namespaces.Size() > 0)
 		{
 			const ParsedNamespace& FirstNamespace = Namespaces[0];
@@ -46,22 +52,39 @@ namespace CE
 			m_Output << FormatName(Namespaces[Index].Name);
 		}
 		m_Output << L"\n";
-		PrintIndent();
+		PrintIndent(L"OnParsed_Namespace");
 		m_Output << L"{\n";
 		++m_Indent;
 		m_ScopeStack.Add(EScopeKind::Namespace);
 		return true;
 	}
 
-	bool PrintParser::OnParsed_Class(const ParsedClass& Class)
+	bool PrintParser::OnParsed_NamespaceAlias(const ParsedNamespaceAlias& NamespaceAlias)
 	{
-		PrintIndent();
-		const std::wstring Attributes = FormatAttributes(Class.Attributes);
+		PrintIndent(L"OnParsed_NamespaceAlias");
+		const std::wstring Attributes = FormatAttributes(NamespaceAlias.Attributes);
 		if (!Attributes.empty())
 		{
 			m_Output << Attributes << L" ";
 		}
-		m_Output << ToString(Class.Type) << L" " << FormatName(Class.Name);
+		m_Output << L"namespace " << FormatName(NamespaceAlias.Name) << L" = " << FormatName(NamespaceAlias.Target) << L";\n";
+		return true;
+	}
+
+	bool PrintParser::OnParsed_Class(const ParsedClass& Class)
+	{
+		PrintIndent(L"OnParsed_Class");
+		if (Class.IsFriend)
+		{
+			m_Output << L"friend ";
+		}
+		m_Output << ToString(Class.Type);
+		const std::wstring Attributes = FormatAttributes(Class.Attributes);
+		if (!Attributes.empty())
+		{
+			m_Output << L" " << Attributes;
+		}
+		m_Output << L" " << FormatName(Class.Name);
 		if (Class.IsFinal)
 		{
 			m_Output << L" final";
@@ -87,7 +110,7 @@ namespace CE
 		if (Class.HasDefinition)
 		{
 			m_Output << L"\n";
-			PrintIndent();
+			PrintIndent(L"OnParsed_Class");
 			m_Output << L"{\n";
 			++m_Indent;
 			m_ScopeStack.Add(EScopeKind::Type);
@@ -107,7 +130,7 @@ namespace CE
 		{
 			--m_Indent;
 		}
-		PrintIndent();
+		PrintIndent(L"OnParsed_AccessSpecifier");
 		m_Output << ToString(Access) << L":\n";
 		m_Indent = SavedIndent;
 		return true;
@@ -115,7 +138,7 @@ namespace CE
 
 	bool PrintParser::OnParsed_Variable(const ParsedVariable& Variable)
 	{
-		PrintIndent();
+		PrintIndent(L"OnParsed_Variable");
 		const std::wstring Attributes = FormatAttributes(Variable.Attributes);
 		if (!Attributes.empty())
 		{
@@ -158,9 +181,62 @@ namespace CE
 		return true;
 	}
 
+	bool PrintParser::OnParsed_Concept(const ParsedConcept& Concept)
+	{
+		PrintIndent(L"OnParsed_Concept");
+		const std::wstring Attributes = FormatAttributes(Concept.Attributes);
+		if (!Attributes.empty())
+		{
+			m_Output << Attributes << L" ";
+		}
+		m_Output << L"concept " << static_cast<std::wstring>(Concept.Name) << L" = " << static_cast<std::wstring>(Concept.Constraint.Text) << L";\n";
+		return true;
+	}
+
+	bool PrintParser::OnParsed_Decltype(const ParsedDecltype& Decltype)
+	{
+		PrintIndent(L"OnParsed_Decltype");
+		const std::wstring Attributes = FormatAttributes(Decltype.Attributes);
+		if (!Attributes.empty())
+		{
+			m_Output << Attributes << L" ";
+		}
+		if (Decltype.IsConstexpr)
+		{
+			m_Output << L"constexpr ";
+		}
+		if (Decltype.IsConsteval)
+		{
+			m_Output << L"consteval ";
+		}
+		if (Decltype.IsStatic)
+		{
+			m_Output << L"static ";
+		}
+		if (Decltype.IsThreadLocal)
+		{
+			m_Output << L"thread_local ";
+		}
+		if (Decltype.IsExtern)
+		{
+			m_Output << L"extern ";
+		}
+		if (Decltype.IsMutable)
+		{
+			m_Output << L"mutable ";
+		}
+		m_Output << L"decltype(" << static_cast<std::wstring>(Decltype.Expression.Text) << L") " << static_cast<std::wstring>(Decltype.Name);
+		if (Decltype.HasInitializer)
+		{
+			m_Output << L" = " << static_cast<std::wstring>(Decltype.Initializer.Text);
+		}
+		m_Output << L";\n";
+		return true;
+	}
+
 	bool PrintParser::OnParsed_Function(const ParsedFunction& Function)
 	{
-		PrintIndent();
+		PrintIndent(L"OnParsed_Function");
 		const std::wstring Attributes = FormatAttributes(Function.Attributes);
 		if (!Attributes.empty())
 		{
@@ -191,10 +267,17 @@ namespace CE
 			m_Output << L"consteval ";
 		}
 
-		const std::wstring ReturnType = FormatType(Function.ReturnType);
-		if (!ReturnType.empty())
+		if (Function.Type == ParsedFunction::EType::Function)
 		{
-			m_Output << ReturnType << L" ";
+			const std::wstring ReturnType = FormatType(Function.ReturnType);
+			if (!ReturnType.empty())
+			{
+				m_Output << ReturnType << L" ";
+			}
+		}
+		else if (Function.Type == ParsedFunction::EType::Destructor)
+		{
+			m_Output << L"~";
 		}
 		m_Output << FormatName(Function.Name) << L"(";
 		for (size_t Index = 0; Index < Function.Parameters.Size(); ++Index)
@@ -276,9 +359,197 @@ namespace CE
 		return true;
 	}
 
+	bool PrintParser::OnParsed_Constructor(const ParsedConstructor& Constructor)
+	{
+		PrintIndent(L"OnParsed_Constructor");
+		const std::wstring Attributes = FormatAttributes(Constructor.Attributes);
+		if (!Attributes.empty())
+		{
+			m_Output << Attributes << L" ";
+		}
+		if (Constructor.IsFriend)
+		{
+			m_Output << L"friend ";
+		}
+		if (Constructor.IsExplicit)
+		{
+			m_Output << L"explicit ";
+		}
+		if (Constructor.IsVirtual)
+		{
+			m_Output << L"virtual ";
+		}
+		if (Constructor.IsInline)
+		{
+			m_Output << L"inline ";
+		}
+		if (Constructor.IsConstexpr)
+		{
+			m_Output << L"constexpr ";
+		}
+		if (Constructor.IsConsteval)
+		{
+			m_Output << L"consteval ";
+		}
+
+		m_Output << FormatName(Constructor.Name) << L"(";
+		for (size_t Index = 0; Index < Constructor.Parameters.Size(); ++Index)
+		{
+			if (Index > 0)
+			{
+				m_Output << L", ";
+			}
+			m_Output << FormatParameter(Constructor.Parameters[Index]);
+		}
+		if (Constructor.IsVariadic)
+		{
+			if (Constructor.Parameters.Size() > 0)
+			{
+				m_Output << L", ";
+			}
+			m_Output << L"...";
+		}
+		m_Output << L")";
+		if (Constructor.RefQualifier == ParsedFunction::ERefQual::LValue)
+		{
+			m_Output << L" &";
+		}
+		else if (Constructor.RefQualifier == ParsedFunction::ERefQual::RValue)
+		{
+			m_Output << L" &&";
+		}
+		if (Constructor.IsNoExcept)
+		{
+			m_Output << L" noexcept";
+			if (Constructor.NoExceptExpression.Text.Size() > 0)
+			{
+				m_Output << L"(" << static_cast<std::wstring>(Constructor.NoExceptExpression.Text) << L")";
+			}
+		}
+		if (Constructor.IsOverride)
+		{
+			m_Output << L" override";
+		}
+		if (Constructor.IsFinal)
+		{
+			m_Output << L" final";
+		}
+		if (Constructor.RequiresClause.Text.Size() > 0)
+		{
+			m_Output << L" requires " << static_cast<std::wstring>(Constructor.RequiresClause.Text);
+		}
+		if (Constructor.IsPure)
+		{
+			m_Output << L" = 0";
+		}
+		else if (Constructor.IsDeleted)
+		{
+			m_Output << L" = delete";
+			if (Constructor.DeletedMessage.Text.Size() > 0)
+			{
+				m_Output << L"(" << static_cast<std::wstring>(Constructor.DeletedMessage.Text) << L")";
+			}
+		}
+		else if (Constructor.IsDefaulted)
+		{
+			m_Output << L" = default";
+		}
+
+		m_Output << (Constructor.HasDefinition ? L" { }\n" : L";\n");
+		return true;
+	}
+
+	bool PrintParser::OnParsed_Destructor(const ParsedDestructor& Destructor)
+	{
+		PrintIndent(L"OnParsed_Destructor");
+		const std::wstring Attributes = FormatAttributes(Destructor.Attributes);
+		if (!Attributes.empty())
+		{
+			m_Output << Attributes << L" ";
+		}
+		if (Destructor.IsFriend)
+		{
+			m_Output << L"friend ";
+		}
+		if (Destructor.IsVirtual)
+		{
+			m_Output << L"virtual ";
+		}
+		if (Destructor.IsInline)
+		{
+			m_Output << L"inline ";
+		}
+		if (Destructor.IsConstexpr)
+		{
+			m_Output << L"constexpr ";
+		}
+		if (Destructor.IsConsteval)
+		{
+			m_Output << L"consteval ";
+		}
+
+		m_Output << L"~" << FormatName(Destructor.Name) << L"(";
+		for (size_t Index = 0; Index < Destructor.Parameters.Size(); ++Index)
+		{
+			if (Index > 0)
+			{
+				m_Output << L", ";
+			}
+			m_Output << FormatParameter(Destructor.Parameters[Index]);
+		}
+		m_Output << L")";
+		if (Destructor.RefQualifier == ParsedFunction::ERefQual::LValue)
+		{
+			m_Output << L" &";
+		}
+		else if (Destructor.RefQualifier == ParsedFunction::ERefQual::RValue)
+		{
+			m_Output << L" &&";
+		}
+		if (Destructor.IsNoExcept)
+		{
+			m_Output << L" noexcept";
+			if (Destructor.NoExceptExpression.Text.Size() > 0)
+			{
+				m_Output << L"(" << static_cast<std::wstring>(Destructor.NoExceptExpression.Text) << L")";
+			}
+		}
+		if (Destructor.IsOverride)
+		{
+			m_Output << L" override";
+		}
+		if (Destructor.IsFinal)
+		{
+			m_Output << L" final";
+		}
+		if (Destructor.RequiresClause.Text.Size() > 0)
+		{
+			m_Output << L" requires " << static_cast<std::wstring>(Destructor.RequiresClause.Text);
+		}
+		if (Destructor.IsPure)
+		{
+			m_Output << L" = 0";
+		}
+		else if (Destructor.IsDeleted)
+		{
+			m_Output << L" = delete";
+			if (Destructor.DeletedMessage.Text.Size() > 0)
+			{
+				m_Output << L"(" << static_cast<std::wstring>(Destructor.DeletedMessage.Text) << L")";
+			}
+		}
+		else if (Destructor.IsDefaulted)
+		{
+			m_Output << L" = default";
+		}
+
+		m_Output << (Destructor.HasDefinition ? L" { }\n" : L";\n");
+		return true;
+	}
+
 	bool PrintParser::OnParsed_Enum(const ParsedEnum& Enum)
 	{
-		PrintIndent();
+		PrintIndent(L"OnParsed_Enum");
 		const std::wstring Attributes = FormatAttributes(Enum.Attributes);
 		if (!Attributes.empty())
 		{
@@ -306,7 +577,7 @@ namespace CE
 		else
 		{
 			m_Output << L"\n";
-			PrintIndent();
+			PrintIndent(L"OnParsed_Enum");
 			m_Output << L"{\n";
 			++m_Indent;
 			m_ScopeStack.Add(EScopeKind::Type);
@@ -316,7 +587,7 @@ namespace CE
 
 	bool PrintParser::OnParsed_EnumValue(const ParsedEnumValue& Value)
 	{
-		PrintIndent();
+		PrintIndent(L"OnParsed_EnumValue");
 		const std::wstring Attributes = FormatAttributes(Value.Attributes);
 		if (!Attributes.empty())
 		{
@@ -343,14 +614,14 @@ namespace CE
 		{
 			--m_Indent;
 		}
-		PrintIndent();
+		PrintIndent(L"OnParsed_ScopeEnd");
 		m_Output << (ScopeKind == EScopeKind::Namespace ? L"}\n" : L"};\n");
 		return true;
 	}
 
 	bool PrintParser::OnParsed_TemplateDeclaration(const ParsedTemplateDeclaration& Template)
 	{
-		PrintIndent();
+		PrintIndent(L"OnParsed_TemplateDeclaration");
 		m_Output << L"template<";
 		for (size_t Index = 0; Index < Template.Parameters.Size(); ++Index)
 		{
@@ -371,7 +642,7 @@ namespace CE
 
 	bool PrintParser::OnParsed_UsingTypedef(const ParsedUsingTypedef& UsingTypedef)
 	{
-		PrintIndent();
+		PrintIndent(L"OnParsed_UsingTypedef");
 		const std::wstring Attributes = FormatAttributes(UsingTypedef.Attributes);
 		if (!Attributes.empty())
 		{
@@ -386,6 +657,9 @@ namespace CE
 		case ParsedUsingTypedef::EKind::AliasDeclaration:
 			m_Output << L"using " << FormatName(UsingTypedef.Name) << L" = " << FormatType(UsingTypedef.Type) << L";\n";
 			break;
+		case ParsedUsingTypedef::EKind::NamespaceAlias:
+			m_Output << L"namespace " << FormatName(UsingTypedef.Name) << L" = " << FormatName(UsingTypedef.Target) << L";\n";
+			break;
 		case ParsedUsingTypedef::EKind::UsingDeclaration:
 			m_Output << L"using " << FormatName(UsingTypedef.Target) << L";\n";
 			break;
@@ -394,6 +668,37 @@ namespace CE
 			break;
 		case ParsedUsingTypedef::EKind::UsingEnum:
 			m_Output << L"using enum " << FormatName(UsingTypedef.Target) << L";\n";
+			break;
+		}
+
+		return true;
+	}
+
+	bool PrintParser::OnParsed_Using(const ParsedUsing& Using)
+	{
+		PrintIndent(L"OnParsed_Using");
+		const std::wstring Attributes = FormatAttributes(Using.Attributes);
+		if (!Attributes.empty())
+		{
+			m_Output << Attributes << L" ";
+		}
+
+		switch (Using.Kind)
+		{
+		case ParsedUsing::EKind::Typedef:
+			m_Output << L"typedef " << FormatType(Using.Type) << L" " << FormatName(Using.Name) << L";\n";
+			break;
+		case ParsedUsing::EKind::AliasDeclaration:
+			m_Output << L"using " << FormatName(Using.Name) << L" = " << FormatType(Using.Type) << L";\n";
+			break;
+		case ParsedUsing::EKind::UsingDeclaration:
+			m_Output << L"using " << FormatName(Using.Target) << L";\n";
+			break;
+		case ParsedUsing::EKind::UsingDirective:
+			m_Output << L"using namespace " << FormatName(Using.Target) << L";\n";
+			break;
+		case ParsedUsing::EKind::UsingEnum:
+			m_Output << L"using enum " << FormatName(Using.Target) << L";\n";
 			break;
 		}
 
@@ -536,6 +841,10 @@ namespace CE
 			if (Indirection.IsVolatile)
 			{
 				Result += L" volatile";
+			}
+			if (Indirection.IsMutable)
+			{
+				Result += L" mutable";
 			}
 		}
 
@@ -687,8 +996,25 @@ namespace CE
 		return Result;
 	}
 
-	void PrintParser::PrintIndent()
+	void PrintParser::PrintFunctionPrefix(const WChar* FunctionName)
 	{
+		static constexpr size_t PrefixWidth = 32;
+
+		m_Output << L"[" << FunctionName << L"]";
+
+		const size_t PrefixLength = std::char_traits<WChar>::length(FunctionName) + 2;
+		for (size_t Index = PrefixLength; Index < PrefixWidth; ++Index)
+		{
+			m_Output << L" ";
+		}
+	}
+
+	void PrintParser::PrintIndent(const WChar* FunctionName)
+	{
+		if (FunctionName)
+		{
+			PrintFunctionPrefix(FunctionName);
+		}
 		for (size_t Index = 0; Index < m_Indent; ++Index)
 		{
 			m_Output << L"\t";
