@@ -1078,21 +1078,24 @@ namespace CE
 
 		ParsedFunction Function;
 		Function.Attributes = LeadingAttributes;
-		Function.HasDefinition = HasDefinition;
+		if (HasDefinition)
+		{
+			Function.Flags |= EFunctionFlag::HasDefinition;
+		}
 		Function.Name = MakeTextName(TokensToText(Declarator, IsDestructorToken(Declarator[NameBegin]) ? NameBegin + 1 : NameBegin, NameIndex + 1));
-		Function.Type = IsDestructorToken(Declarator[NameBegin]) ? ParsedFunction::EType::Destructor : ParsedFunction::EType::Function;
+		const bool IsDestructor = IsDestructorToken(Declarator[NameBegin]);
 
 		Array<TextToken> ReturnTypeTokens;
 		bool IsExplicit = false;
 		for (size_t Index = 0; Index < PrefixTokens.Size(); ++Index)
 		{
 			const TextToken& Token = PrefixTokens[Index];
-			if (IsIdentifier(Token, L"friend")) { Function.IsFriend = true; continue; }
-			if (IsIdentifier(Token, L"virtual")) { Function.IsVirtual = true; continue; }
-			if (IsIdentifier(Token, L"static")) { Function.IsStatic = true; continue; }
-			if (IsIdentifier(Token, L"inline")) { Function.IsInline = true; continue; }
-			if (IsIdentifier(Token, L"constexpr")) { Function.IsConstexpr = true; continue; }
-			if (IsIdentifier(Token, L"consteval")) { Function.IsConsteval = true; continue; }
+			if (IsIdentifier(Token, L"friend")) { Function.Flags |= EFunctionFlag::Friend; continue; }
+			if (IsIdentifier(Token, L"virtual")) { Function.Flags |= EFunctionFlag::Virtual; continue; }
+			if (IsIdentifier(Token, L"static")) { Function.Flags |= EFunctionFlag::Static; continue; }
+			if (IsIdentifier(Token, L"inline")) { Function.Flags |= EFunctionFlag::Inline; continue; }
+			if (IsIdentifier(Token, L"constexpr")) { Function.Flags |= EFunctionFlag::Constexpr; continue; }
+			if (IsIdentifier(Token, L"consteval")) { Function.Flags |= EFunctionFlag::Consteval; continue; }
 			if (IsIdentifier(Token, L"explicit"))
 			{
 				IsExplicit = true;
@@ -1114,11 +1117,8 @@ namespace CE
 		{
 			CurrentClassName = NameToText(m_ParsedScopeClasses[m_ParsedScopeClasses.Size() - 1].Name);
 		}
-		if (Function.Type != ParsedFunction::EType::Destructor && ReturnTypeTokens.Size() == 0 && (FunctionNameText == CurrentClassName || (NameIndex >= 2 && Declarator[NameIndex - 1].Value_Text == L":" && Declarator[NameIndex - 2].Value_Text == L":")))
-		{
-			Function.Type = ParsedFunction::EType::Constructor;
-		}
-		else if (Function.Type == ParsedFunction::EType::Function)
+		const bool IsConstructor = !IsDestructor && ReturnTypeTokens.Size() == 0 && (FunctionNameText == CurrentClassName || (NameIndex >= 2 && Declarator[NameIndex - 1].Value_Text == L":" && Declarator[NameIndex - 2].Value_Text == L":"));
+		if (!IsConstructor && !IsDestructor)
 		{
 			Function.ReturnType = ParseVariableType(ReturnTypeTokens);
 		}
@@ -1141,7 +1141,7 @@ namespace CE
 			}
 			if ((Parameter.Size() == 1 && IsSymbol(Parameter[0], L"...")) || (Parameter.Size() == 3 && IsSymbol(Parameter[0], L".") && IsSymbol(Parameter[1], L".") && IsSymbol(Parameter[2], L".")))
 			{
-				Function.IsVariadic = true;
+				Function.Flags |= EFunctionFlag::Variadic;
 				continue;
 			}
 			Function.Parameters.Add(ParseFunctionParameter(Parameter));
@@ -1150,15 +1150,15 @@ namespace CE
 		for (size_t Index = ParameterClose + 1; Index < Declarator.Size(); ++Index)
 		{
 			const TextToken& Token = Declarator[Index];
-			if (IsIdentifier(Token, L"const")) { Function.IsConst = true; continue; }
-			if (IsIdentifier(Token, L"volatile")) { Function.IsVolatile = true; continue; }
-			if (IsSymbol(Token, L"&")) { Function.RefQualifier = ParsedFunction::ERefQual::LValue; continue; }
-			if (IsSymbol(Token, L"&&")) { Function.RefQualifier = ParsedFunction::ERefQual::RValue; continue; }
-			if (IsIdentifier(Token, L"override")) { Function.IsOverride = true; continue; }
-			if (IsIdentifier(Token, L"final")) { Function.IsFinal = true; continue; }
+			if (IsIdentifier(Token, L"const")) { Function.Flags |= EFunctionFlag::Const; continue; }
+			if (IsIdentifier(Token, L"volatile")) { Function.Flags |= EFunctionFlag::Volatile; continue; }
+			if (IsSymbol(Token, L"&")) { Function.RefQualifier = EFunctionRefQualifier::LValue; continue; }
+			if (IsSymbol(Token, L"&&")) { Function.RefQualifier = EFunctionRefQualifier::RValue; continue; }
+			if (IsIdentifier(Token, L"override")) { Function.Flags |= EFunctionFlag::Override; continue; }
+			if (IsIdentifier(Token, L"final")) { Function.Flags |= EFunctionFlag::Final; continue; }
 			if (IsIdentifier(Token, L"noexcept"))
 			{
-				Function.IsNoExcept = true;
+				Function.Flags |= EFunctionFlag::NoExcept;
 				if (Index + 1 < Declarator.Size() && IsSymbol(Declarator[Index + 1], L"("))
 				{
 					const size_t Close = FindMatchingSymbol(Declarator, Index + 1, L"(", L")");
@@ -1184,73 +1184,39 @@ namespace CE
 			}
 			if (IsSymbol(Token, L"=") && Index + 1 < Declarator.Size())
 			{
-				Function.IsPure = Declarator[Index + 1].RawText == L"0";
-				Function.IsDefaulted = IsIdentifier(Declarator[Index + 1], L"default");
-				Function.IsDeleted = IsIdentifier(Declarator[Index + 1], L"delete");
-				if (Function.IsDeleted && Index + 2 < Declarator.Size() && IsSymbol(Declarator[Index + 2], L"("))
+				if (Declarator[Index + 1].RawText == L"0") { Function.Flags |= EFunctionFlag::Pure; }
+				if (IsIdentifier(Declarator[Index + 1], L"default")) { Function.Flags |= EFunctionFlag::Defaulted; }
+				if (IsIdentifier(Declarator[Index + 1], L"delete")) { Function.Flags |= EFunctionFlag::Deleted; }
+				if (HasFunctionFlag(Function.Flags, EFunctionFlag::Deleted) && Index + 2 < Declarator.Size() && IsSymbol(Declarator[Index + 2], L"("))
 				{
 					const size_t Close = FindMatchingSymbol(Declarator, Index + 2, L"(", L")");
 					Function.DeletedMessage = MakeTextExpression(Declarator, Index + 3, Close);
 				}
 				break;
 			}
-			if (IsSymbol(Token, L":") && Function.Type == ParsedFunction::EType::Constructor)
+			if (IsSymbol(Token, L":") && IsConstructor)
 			{
 				break;
 			}
 		}
 
-		if (Function.Type == ParsedFunction::EType::Constructor)
+		if (IsConstructor)
 		{
 			ParsedConstructor Constructor;
-			Constructor.Name = Function.Name;
-			Constructor.Parameters = Function.Parameters;
-			Constructor.Attributes = Function.Attributes;
-			Constructor.NoExceptExpression = Function.NoExceptExpression;
-			Constructor.DeletedMessage = Function.DeletedMessage;
-			Constructor.RequiresClause = Function.RequiresClause;
-			Constructor.RefQualifier = Function.RefQualifier;
-			Constructor.IsExplicit = IsExplicit;
-			Constructor.IsVirtual = Function.IsVirtual;
-			Constructor.IsOverride = Function.IsOverride;
-			Constructor.IsFinal = Function.IsFinal;
-			Constructor.IsPure = Function.IsPure;
-			Constructor.IsInline = Function.IsInline;
-			Constructor.IsConstexpr = Function.IsConstexpr;
-			Constructor.IsConsteval = Function.IsConsteval;
-			Constructor.IsNoExcept = Function.IsNoExcept;
-			Constructor.IsDeleted = Function.IsDeleted;
-			Constructor.IsDefaulted = Function.IsDefaulted;
-			Constructor.HasDefinition = Function.HasDefinition;
-			Constructor.IsFriend = Function.IsFriend;
-			Constructor.IsVariadic = Function.IsVariadic;
+			static_cast<ParsedFunctionBase&>(Constructor) = Function;
+			if (IsExplicit)
+			{
+				Constructor.Flags |= EFunctionFlag::Explicit;
+			}
 			if (!OnParsed_Constructor(Constructor))
 			{
 				throw TextTokenizerError(TEXT("OnParsed_Constructor returned false"), Declarator[NameIndex], CurrentFile());
 			}
 		}
-		else if (Function.Type == ParsedFunction::EType::Destructor)
+		else if (IsDestructor)
 		{
 			ParsedDestructor Destructor;
-			Destructor.Name = Function.Name;
-			Destructor.Parameters = Function.Parameters;
-			Destructor.Attributes = Function.Attributes;
-			Destructor.NoExceptExpression = Function.NoExceptExpression;
-			Destructor.DeletedMessage = Function.DeletedMessage;
-			Destructor.RequiresClause = Function.RequiresClause;
-			Destructor.RefQualifier = Function.RefQualifier;
-			Destructor.IsVirtual = Function.IsVirtual;
-			Destructor.IsOverride = Function.IsOverride;
-			Destructor.IsFinal = Function.IsFinal;
-			Destructor.IsPure = Function.IsPure;
-			Destructor.IsInline = Function.IsInline;
-			Destructor.IsConstexpr = Function.IsConstexpr;
-			Destructor.IsConsteval = Function.IsConsteval;
-			Destructor.IsNoExcept = Function.IsNoExcept;
-			Destructor.IsDeleted = Function.IsDeleted;
-			Destructor.IsDefaulted = Function.IsDefaulted;
-			Destructor.HasDefinition = Function.HasDefinition;
-			Destructor.IsFriend = Function.IsFriend;
+			static_cast<ParsedFunctionBase&>(Destructor) = Function;
 			if (!OnParsed_Destructor(Destructor))
 			{
 				throw TextTokenizerError(TEXT("OnParsed_Destructor returned false"), Declarator[NameIndex], CurrentFile());

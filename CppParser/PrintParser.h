@@ -27,7 +27,6 @@ namespace CE
 		virtual bool OnParsed_EnumValue(const ParsedEnumValue& Value) override;
 		virtual bool OnParsed_ScopeEnd() override;
 		virtual bool OnParsed_TemplateDeclaration(const ParsedTemplateDeclaration& Template) override;
-		virtual bool OnParsed_UsingTypedef(const ParsedUsingTypedef& UsingTypedef) override;
 		virtual bool OnParsed_Using(const ParsedUsing& Using) override;
 
 
@@ -36,6 +35,13 @@ namespace CE
 		{
 			Namespace,
 			Type,
+		};
+
+		enum class EFunctionKind : uint8
+		{
+			Function,
+			Constructor,
+			Destructor,
 		};
 
 
@@ -49,6 +55,7 @@ namespace CE
 		std::wstring FormatParameter(const ParsedParameter& Parameter) const;
 		std::wstring FormatTemplateParameter(const ParsedTemplateParameter& Parameter) const;
 
+		void PrintFunctionLike(const ParsedFunctionBase& Function, EFunctionKind Kind, const ParsedType* ReturnType = nullptr, const ParsedType* TrailingReturnType = nullptr);
 		void PrintFunctionPrefix(const WChar* FunctionName);
 		void PrintIndent(const WChar* FunctionName = nullptr);
 

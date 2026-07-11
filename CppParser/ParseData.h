@@ -174,96 +174,75 @@ namespace CE
 		bool IsExplicitObject = false;
 	};
 
-	struct ParsedFunction
+	enum class EFunctionRefQualifier : uint8
 	{
-		enum class EType
-		{
-			Function,
-			Constructor,
-			Destructor,
-		};
+		None,
+		LValue,
+		RValue,
+	};
 
-		enum class ERefQual : uint8
-		{
-			None,
-			LValue,
-			RValue,
-		};
+	enum class EFunctionFlag : uint32_t
+	{
+		None = 0,
+		Const = 1 << 0,
+		Volatile = 1 << 1,
+		Virtual = 1 << 2,
+		Override = 1 << 3,
+		Final = 1 << 4,
+		Pure = 1 << 5,
+		Static = 1 << 6,
+		Inline = 1 << 7,
+		Constexpr = 1 << 8,
+		Consteval = 1 << 9,
+		NoExcept = 1 << 10,
+		Deleted = 1 << 11,
+		Defaulted = 1 << 12,
+		HasDefinition = 1 << 13,
+		Friend = 1 << 14,
+		Variadic = 1 << 15,
+		Explicit = 1 << 16,
+	};
 
-		EType Type = EType::Function;
+	inline EFunctionFlag operator|(EFunctionFlag Left, EFunctionFlag Right)
+	{
+		return static_cast<EFunctionFlag>(static_cast<uint32_t>(Left) | static_cast<uint32_t>(Right));
+	}
+
+	inline EFunctionFlag& operator|=(EFunctionFlag& Left, EFunctionFlag Right)
+	{
+		Left = Left | Right;
+		return Left;
+	}
+
+	inline bool HasFunctionFlag(EFunctionFlag Flags, EFunctionFlag Flag)
+	{
+		return (static_cast<uint32_t>(Flags) & static_cast<uint32_t>(Flag)) != 0;
+	}
+
+	struct ParsedFunctionBase
+	{
+		ParsedName Name;
+		Array<ParsedParameter> Parameters;
+		Array<ParsedAttribute> Attributes;
+		ParsedExpression NoExceptExpression;
+		ParsedExpression DeletedMessage;
+		ParsedExpression RequiresClause;
+		EFunctionRefQualifier RefQualifier = EFunctionRefQualifier::None;
+		EFunctionFlag Flags = EFunctionFlag::None;
+	};
+
+	struct ParsedFunction : ParsedFunctionBase
+	{
 		ParsedType ReturnType;
-		ParsedName Name;
-		Array<ParsedParameter> Parameters;
-		Array<ParsedAttribute> Attributes;
-		ParsedExpression NoExceptExpression;
-		ParsedExpression DeletedMessage;
-		ParsedExpression RequiresClause;
 		ParsedType TrailingReturnType;
-		ERefQual RefQualifier = ERefQual::None;
-		bool IsConst = false;
-		bool IsVolatile = false;
-		bool IsVirtual = false;
-		bool IsOverride = false;
-		bool IsFinal = false;
-		bool IsPure = false;
-		bool IsStatic = false;
-		bool IsInline = false;
-		bool IsConstexpr = false;
-		bool IsConsteval = false;
-		bool IsNoExcept = false;
-		bool IsDeleted = false;
-		bool IsDefaulted = false;
-		bool HasDefinition = false;
-		bool IsFriend = false;
-		bool IsVariadic = false;
 	};
 
-	struct ParsedConstructor
+	struct ParsedConstructor : ParsedFunctionBase
 	{
-		ParsedName Name;
-		Array<ParsedParameter> Parameters;
-		Array<ParsedAttribute> Attributes;
-		ParsedExpression NoExceptExpression;
-		ParsedExpression DeletedMessage;
-		ParsedExpression RequiresClause;
-		ParsedFunction::ERefQual RefQualifier = ParsedFunction::ERefQual::None;
-		bool IsExplicit = false;
-		bool IsVirtual = false;
-		bool IsOverride = false;
-		bool IsFinal = false;
-		bool IsPure = false;
-		bool IsInline = false;
-		bool IsConstexpr = false;
-		bool IsConsteval = false;
-		bool IsNoExcept = false;
-		bool IsDeleted = false;
-		bool IsDefaulted = false;
-		bool HasDefinition = false;
-		bool IsFriend = false;
-		bool IsVariadic = false;
 	};
 
-	struct ParsedDestructor
+	struct ParsedDestructor : ParsedFunctionBase
 	{
-		ParsedName Name;
-		Array<ParsedParameter> Parameters;
-		Array<ParsedAttribute> Attributes;
-		ParsedExpression NoExceptExpression;
-		ParsedExpression DeletedMessage;
-		ParsedExpression RequiresClause;
-		ParsedFunction::ERefQual RefQualifier = ParsedFunction::ERefQual::None;
-		bool IsVirtual = false;
-		bool IsOverride = false;
-		bool IsFinal = false;
-		bool IsPure = false;
-		bool IsInline = false;
-		bool IsConstexpr = false;
-		bool IsConsteval = false;
-		bool IsNoExcept = false;
-		bool IsDeleted = false;
-		bool IsDefaulted = false;
-		bool HasDefinition = false;
-		bool IsFriend = false;
 	};
 
 	struct ParsedEnum
@@ -307,39 +286,6 @@ namespace CE
 	{
 		Array<ParsedTemplateParameter> Parameters;
 		ParsedExpression RequiresClause;
-	};
-
-	struct ParsedTemplate
-	{
-		enum class EKind : uint8
-		{
-			ExplicitInstantiation,
-			ExplicitSpecialization,
-		};
-
-		EKind Kind = EKind::ExplicitInstantiation;
-		EClassType ClassType = EClassType::Class;
-		ParsedName Name;
-		bool IsExtern = false;
-	};
-
-	struct ParsedUsingTypedef
-	{
-		enum class EKind : uint8
-		{
-			Typedef,
-			AliasDeclaration,
-			NamespaceAlias,
-			UsingDeclaration,
-			UsingDirective,
-			UsingEnum,
-		};
-
-		EKind Kind = EKind::Typedef;
-		ParsedType Type;
-		ParsedName Name;
-		ParsedName Target;
-		Array<ParsedAttribute> Attributes;
 	};
 
 	struct ParsedUsing

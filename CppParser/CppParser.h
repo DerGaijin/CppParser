@@ -30,7 +30,6 @@ namespace CE
 		virtual bool OnParsed_EnumValue(const ParsedEnumValue& Value) { return true; }
 		virtual bool OnParsed_ScopeEnd() { return true; }
 		virtual bool OnParsed_TemplateDeclaration(const ParsedTemplateDeclaration& Template) { return true; }
-		virtual bool OnParsed_UsingTypedef(const ParsedUsingTypedef& UsingTypedef) { return true; }
 		virtual bool OnParsed_Using(const ParsedUsing& Using) { return true; }
 
 

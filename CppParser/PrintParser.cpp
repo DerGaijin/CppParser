@@ -1,7 +1,5 @@
 #include "PrintParser.h"
 
-#include <iostream>
-
 namespace CE
 {
 	PrintParser::PrintParser(const std::filesystem::path& Path, TextTokenizer& Tokenizer, std::wostream& Output) : CppParser(Path, Tokenizer), m_Output(Output)
@@ -237,45 +235,70 @@ namespace CE
 	bool PrintParser::OnParsed_Function(const ParsedFunction& Function)
 	{
 		PrintIndent(L"OnParsed_Function");
+		PrintFunctionLike(Function, EFunctionKind::Function, &Function.ReturnType, &Function.TrailingReturnType);
+		return true;
+	}
+
+	bool PrintParser::OnParsed_Constructor(const ParsedConstructor& Constructor)
+	{
+		PrintIndent(L"OnParsed_Constructor");
+		PrintFunctionLike(Constructor, EFunctionKind::Constructor);
+		return true;
+	}
+
+	bool PrintParser::OnParsed_Destructor(const ParsedDestructor& Destructor)
+	{
+		PrintIndent(L"OnParsed_Destructor");
+		PrintFunctionLike(Destructor, EFunctionKind::Destructor);
+		return true;
+	}
+
+	void PrintParser::PrintFunctionLike(const ParsedFunctionBase& Function, EFunctionKind Kind, const ParsedType* ReturnType, const ParsedType* TrailingReturnType)
+	{
 		const std::wstring Attributes = FormatAttributes(Function.Attributes);
 		if (!Attributes.empty())
 		{
 			m_Output << Attributes << L" ";
 		}
-		if (Function.IsFriend)
+		if (HasFunctionFlag(Function.Flags, EFunctionFlag::Friend))
 		{
 			m_Output << L"friend ";
 		}
-		if (Function.IsVirtual)
+		if (Kind == EFunctionKind::Constructor && HasFunctionFlag(Function.Flags, EFunctionFlag::Explicit))
+		{
+			m_Output << L"explicit ";
+		}
+		if (HasFunctionFlag(Function.Flags, EFunctionFlag::Virtual))
 		{
 			m_Output << L"virtual ";
 		}
-		if (Function.IsStatic)
+		if (Kind == EFunctionKind::Function && HasFunctionFlag(Function.Flags, EFunctionFlag::Static))
 		{
 			m_Output << L"static ";
 		}
-		if (Function.IsInline)
+		if (HasFunctionFlag(Function.Flags, EFunctionFlag::Inline))
 		{
 			m_Output << L"inline ";
 		}
-		if (Function.IsConstexpr)
+		if (HasFunctionFlag(Function.Flags, EFunctionFlag::Constexpr))
 		{
 			m_Output << L"constexpr ";
 		}
-		if (Function.IsConsteval)
+		if (HasFunctionFlag(Function.Flags, EFunctionFlag::Consteval))
 		{
 			m_Output << L"consteval ";
 		}
 
-		if (Function.Type == ParsedFunction::EType::Function)
+		if (ReturnType != nullptr)
 		{
-			const std::wstring ReturnType = FormatType(Function.ReturnType);
-			if (!ReturnType.empty())
+			const std::wstring ReturnTypeText = FormatType(*ReturnType);
+			if (!ReturnTypeText.empty())
 			{
-				m_Output << ReturnType << L" ";
+				m_Output << ReturnTypeText << L" ";
 			}
 		}
-		else if (Function.Type == ParsedFunction::EType::Destructor)
+
+		if (Kind == EFunctionKind::Destructor)
 		{
 			m_Output << L"~";
 		}
@@ -288,7 +311,7 @@ namespace CE
 			}
 			m_Output << FormatParameter(Function.Parameters[Index]);
 		}
-		if (Function.IsVariadic)
+		if (HasFunctionFlag(Function.Flags, EFunctionFlag::Variadic))
 		{
 			if (Function.Parameters.Size() > 0)
 			{
@@ -297,23 +320,23 @@ namespace CE
 			m_Output << L"...";
 		}
 		m_Output << L")";
-		if (Function.IsConst)
+		if (Kind == EFunctionKind::Function && HasFunctionFlag(Function.Flags, EFunctionFlag::Const))
 		{
 			m_Output << L" const";
 		}
-		if (Function.IsVolatile)
+		if (Kind == EFunctionKind::Function && HasFunctionFlag(Function.Flags, EFunctionFlag::Volatile))
 		{
 			m_Output << L" volatile";
 		}
-		if (Function.RefQualifier == ParsedFunction::ERefQual::LValue)
+		if (Function.RefQualifier == EFunctionRefQualifier::LValue)
 		{
 			m_Output << L" &";
 		}
-		else if (Function.RefQualifier == ParsedFunction::ERefQual::RValue)
+		else if (Function.RefQualifier == EFunctionRefQualifier::RValue)
 		{
 			m_Output << L" &&";
 		}
-		if (Function.IsNoExcept)
+		if (HasFunctionFlag(Function.Flags, EFunctionFlag::NoExcept))
 		{
 			m_Output << L" noexcept";
 			if (Function.NoExceptExpression.Text.Size() > 0)
@@ -321,28 +344,31 @@ namespace CE
 				m_Output << L"(" << static_cast<std::wstring>(Function.NoExceptExpression.Text) << L")";
 			}
 		}
-		if (Function.IsOverride)
+		if (HasFunctionFlag(Function.Flags, EFunctionFlag::Override))
 		{
 			m_Output << L" override";
 		}
-		if (Function.IsFinal)
+		if (HasFunctionFlag(Function.Flags, EFunctionFlag::Final))
 		{
 			m_Output << L" final";
 		}
-		const std::wstring TrailingReturnType = FormatType(Function.TrailingReturnType);
-		if (!TrailingReturnType.empty())
+		if (TrailingReturnType != nullptr)
 		{
-			m_Output << L" -> " << TrailingReturnType;
+			const std::wstring TrailingReturnTypeText = FormatType(*TrailingReturnType);
+			if (!TrailingReturnTypeText.empty())
+			{
+				m_Output << L" -> " << TrailingReturnTypeText;
+			}
 		}
 		if (Function.RequiresClause.Text.Size() > 0)
 		{
 			m_Output << L" requires " << static_cast<std::wstring>(Function.RequiresClause.Text);
 		}
-		if (Function.IsPure)
+		if (HasFunctionFlag(Function.Flags, EFunctionFlag::Pure))
 		{
 			m_Output << L" = 0";
 		}
-		else if (Function.IsDeleted)
+		else if (HasFunctionFlag(Function.Flags, EFunctionFlag::Deleted))
 		{
 			m_Output << L" = delete";
 			if (Function.DeletedMessage.Text.Size() > 0)
@@ -350,201 +376,12 @@ namespace CE
 				m_Output << L"(" << static_cast<std::wstring>(Function.DeletedMessage.Text) << L")";
 			}
 		}
-		else if (Function.IsDefaulted)
+		else if (HasFunctionFlag(Function.Flags, EFunctionFlag::Defaulted))
 		{
 			m_Output << L" = default";
 		}
 
-		m_Output << (Function.HasDefinition ? L" { }\n" : L";\n");
-		return true;
-	}
-
-	bool PrintParser::OnParsed_Constructor(const ParsedConstructor& Constructor)
-	{
-		PrintIndent(L"OnParsed_Constructor");
-		const std::wstring Attributes = FormatAttributes(Constructor.Attributes);
-		if (!Attributes.empty())
-		{
-			m_Output << Attributes << L" ";
-		}
-		if (Constructor.IsFriend)
-		{
-			m_Output << L"friend ";
-		}
-		if (Constructor.IsExplicit)
-		{
-			m_Output << L"explicit ";
-		}
-		if (Constructor.IsVirtual)
-		{
-			m_Output << L"virtual ";
-		}
-		if (Constructor.IsInline)
-		{
-			m_Output << L"inline ";
-		}
-		if (Constructor.IsConstexpr)
-		{
-			m_Output << L"constexpr ";
-		}
-		if (Constructor.IsConsteval)
-		{
-			m_Output << L"consteval ";
-		}
-
-		m_Output << FormatName(Constructor.Name) << L"(";
-		for (size_t Index = 0; Index < Constructor.Parameters.Size(); ++Index)
-		{
-			if (Index > 0)
-			{
-				m_Output << L", ";
-			}
-			m_Output << FormatParameter(Constructor.Parameters[Index]);
-		}
-		if (Constructor.IsVariadic)
-		{
-			if (Constructor.Parameters.Size() > 0)
-			{
-				m_Output << L", ";
-			}
-			m_Output << L"...";
-		}
-		m_Output << L")";
-		if (Constructor.RefQualifier == ParsedFunction::ERefQual::LValue)
-		{
-			m_Output << L" &";
-		}
-		else if (Constructor.RefQualifier == ParsedFunction::ERefQual::RValue)
-		{
-			m_Output << L" &&";
-		}
-		if (Constructor.IsNoExcept)
-		{
-			m_Output << L" noexcept";
-			if (Constructor.NoExceptExpression.Text.Size() > 0)
-			{
-				m_Output << L"(" << static_cast<std::wstring>(Constructor.NoExceptExpression.Text) << L")";
-			}
-		}
-		if (Constructor.IsOverride)
-		{
-			m_Output << L" override";
-		}
-		if (Constructor.IsFinal)
-		{
-			m_Output << L" final";
-		}
-		if (Constructor.RequiresClause.Text.Size() > 0)
-		{
-			m_Output << L" requires " << static_cast<std::wstring>(Constructor.RequiresClause.Text);
-		}
-		if (Constructor.IsPure)
-		{
-			m_Output << L" = 0";
-		}
-		else if (Constructor.IsDeleted)
-		{
-			m_Output << L" = delete";
-			if (Constructor.DeletedMessage.Text.Size() > 0)
-			{
-				m_Output << L"(" << static_cast<std::wstring>(Constructor.DeletedMessage.Text) << L")";
-			}
-		}
-		else if (Constructor.IsDefaulted)
-		{
-			m_Output << L" = default";
-		}
-
-		m_Output << (Constructor.HasDefinition ? L" { }\n" : L";\n");
-		return true;
-	}
-
-	bool PrintParser::OnParsed_Destructor(const ParsedDestructor& Destructor)
-	{
-		PrintIndent(L"OnParsed_Destructor");
-		const std::wstring Attributes = FormatAttributes(Destructor.Attributes);
-		if (!Attributes.empty())
-		{
-			m_Output << Attributes << L" ";
-		}
-		if (Destructor.IsFriend)
-		{
-			m_Output << L"friend ";
-		}
-		if (Destructor.IsVirtual)
-		{
-			m_Output << L"virtual ";
-		}
-		if (Destructor.IsInline)
-		{
-			m_Output << L"inline ";
-		}
-		if (Destructor.IsConstexpr)
-		{
-			m_Output << L"constexpr ";
-		}
-		if (Destructor.IsConsteval)
-		{
-			m_Output << L"consteval ";
-		}
-
-		m_Output << L"~" << FormatName(Destructor.Name) << L"(";
-		for (size_t Index = 0; Index < Destructor.Parameters.Size(); ++Index)
-		{
-			if (Index > 0)
-			{
-				m_Output << L", ";
-			}
-			m_Output << FormatParameter(Destructor.Parameters[Index]);
-		}
-		m_Output << L")";
-		if (Destructor.RefQualifier == ParsedFunction::ERefQual::LValue)
-		{
-			m_Output << L" &";
-		}
-		else if (Destructor.RefQualifier == ParsedFunction::ERefQual::RValue)
-		{
-			m_Output << L" &&";
-		}
-		if (Destructor.IsNoExcept)
-		{
-			m_Output << L" noexcept";
-			if (Destructor.NoExceptExpression.Text.Size() > 0)
-			{
-				m_Output << L"(" << static_cast<std::wstring>(Destructor.NoExceptExpression.Text) << L")";
-			}
-		}
-		if (Destructor.IsOverride)
-		{
-			m_Output << L" override";
-		}
-		if (Destructor.IsFinal)
-		{
-			m_Output << L" final";
-		}
-		if (Destructor.RequiresClause.Text.Size() > 0)
-		{
-			m_Output << L" requires " << static_cast<std::wstring>(Destructor.RequiresClause.Text);
-		}
-		if (Destructor.IsPure)
-		{
-			m_Output << L" = 0";
-		}
-		else if (Destructor.IsDeleted)
-		{
-			m_Output << L" = delete";
-			if (Destructor.DeletedMessage.Text.Size() > 0)
-			{
-				m_Output << L"(" << static_cast<std::wstring>(Destructor.DeletedMessage.Text) << L")";
-			}
-		}
-		else if (Destructor.IsDefaulted)
-		{
-			m_Output << L" = default";
-		}
-
-		m_Output << (Destructor.HasDefinition ? L" { }\n" : L";\n");
-		return true;
+		m_Output << (HasFunctionFlag(Function.Flags, EFunctionFlag::HasDefinition) ? L" { }\n" : L";\n");
 	}
 
 	bool PrintParser::OnParsed_Enum(const ParsedEnum& Enum)
@@ -637,40 +474,6 @@ namespace CE
 			m_Output << L" requires " << static_cast<std::wstring>(Template.RequiresClause.Text);
 		}
 		m_Output << L"\n";
-		return true;
-	}
-
-	bool PrintParser::OnParsed_UsingTypedef(const ParsedUsingTypedef& UsingTypedef)
-	{
-		PrintIndent(L"OnParsed_UsingTypedef");
-		const std::wstring Attributes = FormatAttributes(UsingTypedef.Attributes);
-		if (!Attributes.empty())
-		{
-			m_Output << Attributes << L" ";
-		}
-
-		switch (UsingTypedef.Kind)
-		{
-		case ParsedUsingTypedef::EKind::Typedef:
-			m_Output << L"typedef " << FormatType(UsingTypedef.Type) << L" " << FormatName(UsingTypedef.Name) << L";\n";
-			break;
-		case ParsedUsingTypedef::EKind::AliasDeclaration:
-			m_Output << L"using " << FormatName(UsingTypedef.Name) << L" = " << FormatType(UsingTypedef.Type) << L";\n";
-			break;
-		case ParsedUsingTypedef::EKind::NamespaceAlias:
-			m_Output << L"namespace " << FormatName(UsingTypedef.Name) << L" = " << FormatName(UsingTypedef.Target) << L";\n";
-			break;
-		case ParsedUsingTypedef::EKind::UsingDeclaration:
-			m_Output << L"using " << FormatName(UsingTypedef.Target) << L";\n";
-			break;
-		case ParsedUsingTypedef::EKind::UsingDirective:
-			m_Output << L"using namespace " << FormatName(UsingTypedef.Target) << L";\n";
-			break;
-		case ParsedUsingTypedef::EKind::UsingEnum:
-			m_Output << L"using enum " << FormatName(UsingTypedef.Target) << L";\n";
-			break;
-		}
-
 		return true;
 	}
 
