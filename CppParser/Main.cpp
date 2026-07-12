@@ -1,6 +1,7 @@
 #include "TextTokenizerInput_String.h"
 #include "PrintParser.h"
 #include "ParseManager.h"
+#include "UnitTest.hpp"
 using namespace CE;
 
 #include <fstream>
@@ -12,7 +13,7 @@ int main()
 	ParseManager<PrintParser> PM;
 	PM.ParseSystemIncludes = false;
 	PM.SetupEnvironment();
-	PM.AddFile("TestFile_02");
+	PM.AddFile("UnitTest.hpp");
 	PM.Definitions["CE_API"] = PreprocessorDefinition::Create({}, L"");
 
 	std::wofstream ResultFile("Result.hpp");

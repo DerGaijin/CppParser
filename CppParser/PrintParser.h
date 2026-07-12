@@ -9,60 +9,63 @@ namespace CE
 	{
 	public:
 		PrintParser(const std::filesystem::path& Path, TextTokenizer& Tokenizer, std::wostream& Output);
-	
+
 
 	protected:
 		virtual void OnParseBegin() override;
-		virtual bool OnParsed_Namespace(const Array<ParsedNamespace>& Namespaces) override;
-		virtual bool OnParsed_NamespaceAlias(const ParsedNamespaceAlias& NamespaceAlias) override;
-		virtual bool OnParsed_Class(const ParsedClass& Class) override;
-		virtual bool OnParsed_AccessSpecifier(EAccessSpecifier Access) override;
-		virtual bool OnParsed_Variable(const ParsedVariable& Variable) override;
-		virtual bool OnParsed_Concept(const ParsedConcept& Concept) override;
-		virtual bool OnParsed_Decltype(const ParsedDecltype& Decltype) override;
-		virtual bool OnParsed_Function(const ParsedFunction& Function) override;
-		virtual bool OnParsed_Constructor(const ParsedConstructor& Constructor) override;
-		virtual bool OnParsed_Destructor(const ParsedDestructor& Destructor) override;
-		virtual bool OnParsed_Enum(const ParsedEnum& Enum) override;
-		virtual bool OnParsed_EnumValue(const ParsedEnumValue& Value) override;
-		virtual bool OnParsed_ScopeEnd() override;
-		virtual bool OnParsed_TemplateDeclaration(const ParsedTemplateDeclaration& Template) override;
-		virtual bool OnParsed_Using(const ParsedUsing& Using) override;
+		virtual bool OnParsed_Namespace(const Array<ParsedNamespace>& Namespaces);
+		virtual bool OnParsed_NamespaceAlias(const ParsedNamespaceAlias& Alias);
+		virtual bool OnParsed_ScopeEnd();
+		virtual bool OnParsed_Class(const ParsedClass& Class);
+		virtual bool OnParsed_Access(EAccessSpecifier Access);
+		virtual bool OnParsed_Enum(const ParsedEnum& Enum);
+		virtual bool OnParsed_EnumValue(const ParsedEnumValue& Value);
+		virtual bool OnParsed_Variable(const ParsedVariable& Value);
+		virtual bool OnParsed_Constructor(const ParsedConstructor& Constructor);
+		virtual bool OnParsed_Destructor(const ParsedDestructor& Destructor);
+		virtual bool OnParsed_Function(const ParsedFunction& Function);
+		virtual bool OnParsed_Operator(const ParsedOperator& Operator);
+		virtual bool OnParsed_Using(const ParsedUsing& Using);
+		virtual bool OnParsed_Template(const ParsedTemplate& Template);
+		virtual bool OnParsed_Concept(const ParsedTemplate& Concept);
+		virtual bool OnParsed_StaticAssert(const ParsedStaticAssert& Assert);
 
 
 	private:
-		enum class EScopeKind : uint8
-		{
-			Namespace,
-			Type,
-		};
+		static bool HasFlag(EParsedTypeFlags Flags, EParsedTypeFlags Flag);
+		static bool HasFlag(EParsedVariableFlags Flags, EParsedVariableFlags Flag);
+		static bool HasFlag(EParsedFunctionFlags Flags, EParsedFunctionFlags Flag);
+		static void AppendSeparated(String& Output, const String& Value, const WChar* Separator = L", ");
+		static String FormatExpression(const ParsedExpression& Expression);
+		static String FormatName(const ParsedName& Name);
+		static String FormatAttribute(const ParsedAttribute& Attribute);
+		static String FormatAttributes(const Array<ParsedAttribute>& Attributes);
+		static String FormatType(const ParsedType& Type, const String& Declarator = L"");
+		static String FormatTemplateArgument(const ParsedTemplateArgument& Argument);
+		static String FormatParameter(const ParsedFunctionParameter& Parameter);
+		static String FormatTemplateParameter(const ParsedTemplateParameter& Parameter);
+		static String FormatFunctionSuffix(const ParsedFunctionBase& Function);
+		static void AppendFunctionPrefix(String& Result, const ParsedFunctionBase& Function);
+		static String FormatFunction(const ParsedFunctionBase& Function, const String& Declaration);
 
-		enum class EFunctionKind : uint8
-		{
-			Function,
-			Constructor,
-			Destructor,
-		};
+		void PrintFunctionText(const String& Name);
+		void PrintIndentText(int32 Shift = 0);
 
 
-	private:
-		static const WChar* ToString(EAccessSpecifier Access);
-		static const WChar* ToString(EClassType Type);
-
-		std::wstring FormatName(const ParsedName& Name) const;
-		std::wstring FormatType(const ParsedType& Type) const;
-		std::wstring FormatAttributes(const Array<ParsedAttribute>& Attributes) const;
-		std::wstring FormatParameter(const ParsedParameter& Parameter) const;
-		std::wstring FormatTemplateParameter(const ParsedTemplateParameter& Parameter) const;
-
-		void PrintFunctionLike(const ParsedFunctionBase& Function, EFunctionKind Kind, const ParsedType* ReturnType = nullptr, const ParsedType* TrailingReturnType = nullptr);
-		void PrintFunctionPrefix(const WChar* FunctionName);
-		void PrintIndent(const WChar* FunctionName = nullptr);
+	public:
+		bool PrintFunction = true;
 
 
 	private:
 		std::wostream& m_Output;
-		size_t m_Indent = 0;
-		Array<EScopeKind> m_ScopeStack;
+
+		struct ScopeInfo 
+		{
+			bool RequiresSemicolon = false;
+			ParsedType Type;
+		};
+		Array<ScopeInfo> m_Scopes;
+		ScopeInfo m_LastClosedScope;
+		size_t m_AnonymousTypeCount = 0;
 	};
 }
