@@ -185,7 +185,7 @@ namespace CE
 		bool IsVariadic = false;
 	};
 
-	enum class EParsedFunctionFlags
+	enum class EParsedFunctionFlags : uint16
 	{
 		None = 0,
 		HasBody = 1 << 0,

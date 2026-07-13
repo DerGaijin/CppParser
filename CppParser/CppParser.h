@@ -28,7 +28,7 @@ namespace CE
 		virtual bool OnParsed_Operator(const ParsedOperator& Operator) { return true; }
 		virtual bool OnParsed_Using(const ParsedUsing& Using) { return true; }
 		virtual bool OnParsed_Template(const ParsedTemplate& Template) { return true; }
-		virtual bool OnParsed_Concept(const ParsedTemplate& Concept) { return true; }
+		virtual bool OnParsed_Concept(const ParsedConcept& Concept) { return true; }
 		virtual bool OnParsed_StaticAssert(const ParsedStaticAssert& Assert) { return true; }
 
 	};

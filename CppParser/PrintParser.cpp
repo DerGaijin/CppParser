@@ -18,24 +18,23 @@ namespace CE
 
 	bool PrintParser::OnParsed_Namespace(const Array<ParsedNamespace>& Namespaces)
 	{
-		static const WChar* FuncText = L"OnParsed_Namespace";
-		PrintFunctionText(FuncText);
+		PrintFunctionText(L"OnParsed_Namespace");
 		PrintIndentText();
 		if (Namespaces.Size() > 0 && Namespaces[0].IsInline)
 		{
 			m_Output << L"inline ";
 		}
 		m_Output << L"namespace ";
-		if (Namespaces.Size() > 0)
+		for (const ParsedNamespace& Namespace : Namespaces)
 		{
-			const String Attributes = FormatAttributes(Namespaces[0].Attributes);
+			String Attributes = FormatAttributes(Namespace.Attributes);
 			if (Attributes.Size() > 0)
 			{
 				m_Output << Attributes.Data() << L" ";
 			}
 		}
 		bool IsFirst = true;
-		for (auto& Namespace : Namespaces)
+		for (const ParsedNamespace& Namespace : Namespaces)
 		{
 			if (IsFirst)
 			{
@@ -51,11 +50,11 @@ namespace CE
 			}
 			m_Output << Namespace.Name.Data();
 		}
-		m_Output << "\n";
-		PrintFunctionText(FuncText);
+		m_Output << L"\n";
+		PrintFunctionText(L"OnParsed_Namespace");
 		PrintIndentText();
 		m_Output << L"{\n";
-		m_Scopes.Emplace(ScopeInfo{});
+		m_Scopes.Emplace();
 		return true;
 	}
 
@@ -63,7 +62,13 @@ namespace CE
 	{
 		PrintFunctionText(L"OnParsed_NamespaceAlias");
 		PrintIndentText();
-		m_Output << L"namespace " << FormatName(Alias.Name).Data() << L" = " << FormatName(Alias.Target).Data() << L";\n";
+		m_Output << L"namespace ";
+		String Attributes = FormatAttributes(Alias.Attributes);
+		if (Attributes.Size() > 0)
+		{
+			m_Output << Attributes.Data() << L" ";
+		}
+		m_Output << FormatName(Alias.Name).Data() << L" = " << FormatName(Alias.Target).Data() << L";\n";
 		return true;
 	}
 
@@ -73,68 +78,125 @@ namespace CE
 		{
 			return false;
 		}
-		m_LastClosedScope = m_Scopes[m_Scopes.Size() - 1];
-		m_Scopes.RemoveAt(m_Scopes.Size() - 1);
+
 		PrintFunctionText(L"OnParsed_ScopeEnd");
-		PrintIndentText();
-		m_Output << L"}" << (m_LastClosedScope.RequiresSemicolon ? L";" : L"") << L"\n";
+		PrintIndentText(-1);
+		m_Output << L"}";
+
+		m_LastClosedScope = std::move(m_Scopes[m_Scopes.Size() - 1]);
+		m_Scopes.RemoveAt(m_Scopes.Size() - 1);
+		if (m_LastClosedScope.RequiresSemicolon)
+		{
+			m_Output << L";";
+		}
+		m_Output << L"\n";
 		return true;
 	}
 
 	bool PrintParser::OnParsed_Class(const ParsedClass& Class)
 	{
-		ParsedType AnonymousType;
-		const ParsedName* Name = &Class.Name;
-		if (Class.IsAnonymous)
-		{
-			AnonymousType.Name.Segments.Emplace(ParsedNameSegment{ String::Format(L"__ANONYMOUS_%zu__", ++m_AnonymousTypeCount) });
-			Name = &AnonymousType.Name;
-		}
-
 		PrintFunctionText(L"OnParsed_Class");
 		PrintIndentText();
-		const String Attributes = FormatAttributes(Class.Attributes);
-		if (Class.IsFriend) m_Output << L"friend ";
+		if (Class.IsFriend)
+		{
+			m_Output << L"friend ";
+		}
+
 		switch (Class.Type)
 		{
-		case EClassType::Class: m_Output << L"class "; break;
-		case EClassType::Struct: m_Output << L"struct "; break;
-		case EClassType::Union: m_Output << L"union "; break;
+		case EClassType::Class:
+			m_Output << L"class";
+			break;
+		case EClassType::Struct:
+			m_Output << L"struct";
+			break;
+		case EClassType::Union:
+			m_Output << L"union";
+			break;
 		}
-		if (Attributes.Size() > 0) m_Output << Attributes.Data() << L" ";
-		m_Output << FormatName(*Name).Data();
-		if (Class.IsFinal) m_Output << L" final";
+
+		String Attributes = FormatAttributes(Class.Attributes);
+		if (Attributes.Size() > 0)
+		{
+			m_Output << L" " << Attributes.Data();
+		}
+		if (!Class.IsAnonymous)
+		{
+			m_Output << L" " << FormatName(Class.Name).Data();
+		}
+
+		if (Class.Specialization.Size() > 0)
+		{
+			m_Output << L"<";
+			for (size_t Index = 0; Index < Class.Specialization.Size(); ++Index)
+			{
+				if (Index > 0)
+				{
+					m_Output << L", ";
+				}
+
+				const ParsedTemplateArgument& Argument = Class.Specialization[Index];
+				if (Argument.Kind == ParsedTemplateArgument::EKind::Type)
+				{
+					m_Output << FormatName(Argument.Type.Name).Data();
+				}
+				else
+				{
+					m_Output << Argument.Expression.Text.Data();
+				}
+			}
+			m_Output << L">";
+		}
+
+		if (Class.IsFinal)
+		{
+			m_Output << L" final";
+		}
+
 		if (Class.BaseClasses.Size() > 0)
 		{
 			m_Output << L" : ";
-			bool First = true;
-			for (const ParsedBaseClass& Base : Class.BaseClasses)
+			for (size_t Index = 0; Index < Class.BaseClasses.Size(); ++Index)
 			{
-				if (!First) m_Output << L", ";
-				First = false;
-				switch (Base.AccessSpecifier)
+				if (Index > 0)
 				{
-				case EAccessSpecifier::Public: m_Output << L"public "; break;
-				case EAccessSpecifier::Protected: m_Output << L"protected "; break;
-				case EAccessSpecifier::Private: m_Output << L"private "; break;
+					m_Output << L", ";
 				}
-				if (Base.IsVirtual) m_Output << L"virtual ";
-				m_Output << FormatType(Base.Type).Data();
+
+				const ParsedBaseClass& BaseClass = Class.BaseClasses[Index];
+				switch (BaseClass.AccessSpecifier)
+				{
+				case EAccessSpecifier::Public:
+					m_Output << L"public ";
+					break;
+				case EAccessSpecifier::Protected:
+					m_Output << L"protected ";
+					break;
+				case EAccessSpecifier::Private:
+					m_Output << L"private ";
+					break;
+				}
+				if (BaseClass.IsVirtual)
+				{
+					m_Output << L"virtual ";
+				}
+				m_Output << FormatName(BaseClass.Type.Name).Data();
 			}
 		}
+
 		if (!Class.HasBody)
 		{
 			m_Output << L";\n";
 			return true;
 		}
+
 		m_Output << L"\n";
 		PrintFunctionText(L"OnParsed_Class");
 		PrintIndentText();
 		m_Output << L"{\n";
-		ScopeInfo Scope;
-		Scope.RequiresSemicolon = true;
-		Scope.Type = std::move(AnonymousType);
-		m_Scopes.Emplace(Scope);
+		m_Scopes.Emplace();
+		m_Scopes[m_Scopes.Size() - 1].RequiresSemicolon = true;
+		m_Scopes[m_Scopes.Size() - 1].Name = Class.Name;
 		return true;
 	}
 
@@ -160,35 +222,41 @@ namespace CE
 
 	bool PrintParser::OnParsed_Enum(const ParsedEnum& Enum)
 	{
-		ParsedType AnonymousType;
-		const ParsedName* Name = &Enum.Name;
-		if (Enum.IsAnonymous)
-		{
-			AnonymousType.Name.Segments.Emplace(ParsedNameSegment{ String::Format(L"__ANONYMOUS_%zu__", ++m_AnonymousTypeCount) });
-			Name = &AnonymousType.Name;
-		}
-
 		PrintFunctionText(L"OnParsed_Enum");
 		PrintIndentText();
-		const String Attributes = FormatAttributes(Enum.Attributes);
-		m_Output << L"enum ";
-		if (Enum.IsScoped) m_Output << (Enum.IsStruct ? L"struct " : L"class ");
-		if (Attributes.Size() > 0) m_Output << Attributes.Data() << L" ";
-		m_Output << FormatName(*Name).Data();
-		if (Enum.UnderlyingType.Name.Segments.Size() > 0) m_Output << L" : " << FormatType(Enum.UnderlyingType).Data();
+		m_Output << L"enum";
+		if (Enum.IsScoped)
+		{
+			m_Output << (Enum.IsStruct ? L" struct" : L" class");
+		}
+
+		String Attributes = FormatAttributes(Enum.Attributes);
+		if (Attributes.Size() > 0)
+		{
+			m_Output << L" " << Attributes.Data();
+		}
+		if (!Enum.IsAnonymous)
+		{
+			m_Output << L" " << FormatName(Enum.Name).Data();
+		}
+		if (Enum.UnderlyingType.Name.Segments.Size() > 0)
+		{
+			m_Output << L" : " << FormatType(Enum.UnderlyingType).Data();
+		}
+
 		if (Enum.IsForward)
 		{
 			m_Output << L";\n";
 			return true;
 		}
+
 		m_Output << L"\n";
 		PrintFunctionText(L"OnParsed_Enum");
 		PrintIndentText();
 		m_Output << L"{\n";
-		ScopeInfo Scope;
-		Scope.RequiresSemicolon = true;
-		Scope.Type = std::move(AnonymousType);
-		m_Scopes.Emplace(Scope);
+		m_Scopes.Emplace();
+		m_Scopes[m_Scopes.Size() - 1].RequiresSemicolon = true;
+		m_Scopes[m_Scopes.Size() - 1].Name = Enum.Name;
 		return true;
 	}
 
@@ -196,10 +264,19 @@ namespace CE
 	{
 		PrintFunctionText(L"OnParsed_EnumValue");
 		PrintIndentText();
-		const String Attributes = FormatAttributes(Value.Attributes);
-		if (Attributes.Size() > 0) m_Output << Attributes.Data() << L" ";
 		m_Output << Value.Name.Data();
-		if (Value.HasValue) m_Output << L" = " << FormatExpression(Value.Value).Data();
+
+		String Attributes = FormatAttributes(Value.Attributes);
+		if (Attributes.Size() > 0)
+		{
+			m_Output << L" " << Attributes.Data();
+		}
+
+		if (Value.HasValue)
+		{
+			m_Output << L" = " << Value.Value.Text.Data();
+		}
+
 		m_Output << L",\n";
 		return true;
 	}
@@ -208,65 +285,191 @@ namespace CE
 	{
 		PrintFunctionText(L"OnParsed_Variable");
 		PrintIndentText();
-		const String Attributes = FormatAttributes(Value.Attributes);
-		if (Attributes.Size() > 0) m_Output << Attributes.Data() << L" ";
-		if (HasFlag(Value.Flags, EParsedVariableFlags::IsExtern)) m_Output << L"extern ";
-		if (HasFlag(Value.Flags, EParsedVariableFlags::IsStatic)) m_Output << L"static ";
-		if (HasFlag(Value.Flags, EParsedVariableFlags::IsThreadLocal)) m_Output << L"thread_local ";
-		if (HasFlag(Value.Flags, EParsedVariableFlags::IsMutable)) m_Output << L"mutable ";
-		if (HasFlag(Value.Flags, EParsedVariableFlags::IsConstexpr)) m_Output << L"constexpr ";
-		if (HasFlag(Value.Flags, EParsedVariableFlags::IsConsteval)) m_Output << L"consteval ";
-		const ParsedType& Type = Value.Type.Name.Segments.Size() > 0 ? Value.Type : m_LastClosedScope.Type;
-		m_Output << FormatType(Type, FormatName(Value.Name)).Data();
-		if (HasFlag(Value.Flags, EParsedVariableFlags::HasInitializer)) m_Output << L" = " << FormatExpression(Value.Initializer).Data();
+		String Attributes = FormatAttributes(Value.Attributes);
+		if (Attributes.Size() > 0)
+		{
+			m_Output << Attributes.Data() << L" ";
+		}
+		if (HasFlag(Value.Flags, EParsedVariableFlags::IsStatic))
+		{
+			m_Output << L"static ";
+		}
+		if (HasFlag(Value.Flags, EParsedVariableFlags::IsThreadLocal))
+		{
+			m_Output << L"thread_local ";
+		}
+		if (HasFlag(Value.Flags, EParsedVariableFlags::IsExtern))
+		{
+			m_Output << L"extern ";
+		}
+		if (HasFlag(Value.Flags, EParsedVariableFlags::IsMutable))
+		{
+			m_Output << L"mutable ";
+		}
+		if (HasFlag(Value.Flags, EParsedVariableFlags::IsConstexpr))
+		{
+			m_Output << L"constexpr ";
+		}
+		if (HasFlag(Value.Flags, EParsedVariableFlags::IsConsteval))
+		{
+			m_Output << L"consteval ";
+		}
+
+		m_Output << FormatType(Value.Type).Data() << L" " << FormatName(Value.Name).Data();
+		if (HasFlag(Value.Flags, EParsedVariableFlags::HasInitializer))
+		{
+			m_Output << (HasFlag(Value.Flags, EParsedVariableFlags::IsBitfield) ? L" : " : L" = ") << Value.Initializer.Text.Data();
+		}
 		m_Output << L";\n";
 		return true;
 	}
 
 	bool PrintParser::OnParsed_Constructor(const ParsedConstructor& Constructor)
 	{
-		PrintFunctionText(L"OnParsed_Constructor");
-		PrintIndentText();
-		m_Output << FormatFunction(Constructor, FormatName(Constructor.Name)).Data();
-		if (HasFlag(Constructor.Flags, EParsedFunctionFlags::HasBody)) m_Output << L" " << FormatExpression(Constructor.Body).Data();
-		else m_Output << L";";
-		m_Output << L"\n";
-		return true;
+		return PrintParsedFunction(L"OnParsed_Constructor", Constructor);
 	}
 
 	bool PrintParser::OnParsed_Destructor(const ParsedDestructor& Destructor)
 	{
-		PrintFunctionText(L"OnParsed_Destructor");
-		PrintIndentText();
-		m_Output << FormatFunction(Destructor, L"~" + FormatName(Destructor.Name)).Data();
-		if (HasFlag(Destructor.Flags, EParsedFunctionFlags::HasBody)) m_Output << L" " << FormatExpression(Destructor.Body).Data();
-		else m_Output << L";";
-		m_Output << L"\n";
-		return true;
+		return PrintParsedFunction(L"OnParsed_Destructor", Destructor);
 	}
 
 	bool PrintParser::OnParsed_Function(const ParsedFunction& Function)
 	{
-		PrintFunctionText(L"OnParsed_Function");
-		PrintIndentText();
-		String Declaration = Function.IsTrailingType ? L"auto " + FormatName(Function.Name) : FormatType(Function.ReturnType, FormatName(Function.Name));
-		m_Output << FormatFunction(Function, Declaration).Data();
-		if (Function.IsTrailingType) m_Output << L" -> " << FormatType(Function.ReturnType).Data();
-		if (HasFlag(Function.Flags, EParsedFunctionFlags::HasBody)) m_Output << L" " << FormatExpression(Function.Body).Data();
-		else m_Output << L";";
-		m_Output << L"\n";
-		return true;
+		return PrintParsedFunction(L"OnParsed_Function", Function, &Function.ReturnType, nullptr, Function.IsTrailingType);
 	}
 
 	bool PrintParser::OnParsed_Operator(const ParsedOperator& Operator)
 	{
-		PrintFunctionText(L"OnParsed_Operator");
+		return PrintParsedFunction(L"OnParsed_Operator", Operator, &Operator.ReturnType, &Operator.Symbol, Operator.IsTrailingType);
+	}
+
+	bool PrintParser::PrintParsedFunction(const String& CallbackName, const ParsedFunctionBase& Function, const ParsedType* ReturnType, const String* OperatorSymbol, bool IsTrailingReturnType)
+	{
+		PrintFunctionText(CallbackName);
 		PrintIndentText();
-		String Name = FormatName(Operator.Name);
-		if (Name.Size() == 0) Name = L"operator" + Operator.Symbol;
-		m_Output << FormatFunction(Operator, FormatType(Operator.ReturnType, Name)).Data();
-		if (HasFlag(Operator.Flags, EParsedFunctionFlags::HasBody)) m_Output << L" " << FormatExpression(Operator.Body).Data();
-		else m_Output << L";";
+
+		String Attributes = FormatAttributes(Function.Attributes);
+		if (Attributes.Size() > 0)
+		{
+			m_Output << Attributes.Data() << L" ";
+		}
+		if (HasFlag(Function.Flags, EParsedFunctionFlags::IsStatic))
+		{
+			m_Output << L"static ";
+		}
+		if (HasFlag(Function.Flags, EParsedFunctionFlags::IsInline))
+		{
+			m_Output << L"inline ";
+		}
+		if (HasFlag(Function.Flags, EParsedFunctionFlags::IsVirtual))
+		{
+			m_Output << L"virtual ";
+		}
+		if (HasFlag(Function.Flags, EParsedFunctionFlags::IsExplicit))
+		{
+			m_Output << L"explicit ";
+		}
+		if (HasFlag(Function.Flags, EParsedFunctionFlags::IsConstexpr))
+		{
+			m_Output << L"constexpr ";
+		}
+		if (HasFlag(Function.Flags, EParsedFunctionFlags::IsConsteval))
+		{
+			m_Output << L"consteval ";
+		}
+
+		if (ReturnType != nullptr)
+		{
+			m_Output << (IsTrailingReturnType ? L"auto" : FormatType(*ReturnType).Data()) << L" ";
+		}
+		if (OperatorSymbol != nullptr && OperatorSymbol->Size() > 0)
+		{
+			m_Output << L"operator" << OperatorSymbol->Data();
+		}
+		else
+		{
+			m_Output << FormatName(Function.Name).Data();
+		}
+
+		m_Output << L"(";
+		for (size_t Index = 0; Index < Function.Parameters.Size(); ++Index)
+		{
+			if (Index > 0)
+			{
+				m_Output << L", ";
+			}
+
+			const ParsedFunctionParameter& Parameter = Function.Parameters[Index];
+			String ParameterAttributes = FormatAttributes(Parameter.Attributes);
+			if (ParameterAttributes.Size() > 0)
+			{
+				m_Output << ParameterAttributes.Data() << L" ";
+			}
+			if (Parameter.IsVariadic)
+			{
+				m_Output << L"...";
+			}
+			else
+			{
+				m_Output << FormatType(Parameter.Type).Data();
+				if (Parameter.Name.Segments.Size() > 0)
+				{
+					m_Output << L" " << FormatName(Parameter.Name).Data();
+				}
+			}
+			if (Parameter.HasDefaultValue)
+			{
+				m_Output << L" = " << Parameter.DefaultValue.Text.Data();
+			}
+		}
+		m_Output << L")";
+
+		for (const String& Specifier : Function.Specifiers)
+		{
+			m_Output << L" " << Specifier.Data();
+		}
+		for (const String& Qualifier : Function.Qualifiers)
+		{
+			m_Output << L" " << Qualifier.Data();
+		}
+		if (HasFlag(Function.Flags, EParsedFunctionFlags::IsNoexcept))
+		{
+			m_Output << L" noexcept";
+			if (Function.NoexceptExpression.Text.Size() > 0)
+			{
+				m_Output << L"(" << Function.NoexceptExpression.Text.Data() << L")";
+			}
+		}
+		if (IsTrailingReturnType)
+		{
+			m_Output << L" -> " << FormatType(*ReturnType).Data();
+		}
+		if (HasFlag(Function.Flags, EParsedFunctionFlags::HasRequires))
+		{
+			m_Output << L" requires " << Function.RequiresClause.Text.Data();
+		}
+		if (HasFlag(Function.Flags, EParsedFunctionFlags::IsPureVirtual))
+		{
+			m_Output << L" = 0";
+		}
+		else if (HasFlag(Function.Flags, EParsedFunctionFlags::IsDefaulted))
+		{
+			m_Output << L" = default";
+		}
+		else if (HasFlag(Function.Flags, EParsedFunctionFlags::IsDeleted))
+		{
+			m_Output << L" = delete";
+		}
+
+		if (HasFlag(Function.Flags, EParsedFunctionFlags::HasBody))
+		{
+			m_Output << L" " << Function.Body.Text.Data();
+		}
+		else
+		{
+			m_Output << L";";
+		}
 		m_Output << L"\n";
 		return true;
 	}
@@ -275,15 +478,43 @@ namespace CE
 	{
 		PrintFunctionText(L"OnParsed_Using");
 		PrintIndentText();
-		const String Attributes = FormatAttributes(Using.Attributes);
-		if (Attributes.Size() > 0) m_Output << Attributes.Data() << L" ";
+
+		String Attributes = FormatAttributes(Using.Attributes);
 		switch (Using.Kind)
 		{
-		case ParsedUsing::EKind::Typedef: m_Output << L"typedef " << FormatType(Using.Type, FormatName(Using.Name)).Data(); break;
-		case ParsedUsing::EKind::AliasDeclaration: m_Output << L"using " << FormatName(Using.Name).Data() << L" = " << FormatType(Using.Type).Data(); break;
-		case ParsedUsing::EKind::UsingDeclaration: m_Output << L"using " << FormatName(Using.Target).Data(); break;
-		case ParsedUsing::EKind::UsingDirective: m_Output << L"using namespace " << FormatName(Using.Target).Data(); break;
+		case ParsedUsing::EKind::Typedef:
+			if (Attributes.Size() > 0)
+			{
+				m_Output << Attributes.Data() << L" ";
+			}
+			m_Output << L"typedef " << FormatType(Using.Type).Data() << L" " << FormatName(Using.Name).Data();
+			break;
+		case ParsedUsing::EKind::AliasDeclaration:
+			m_Output << L"using " << FormatName(Using.Name).Data();
+			if (Attributes.Size() > 0)
+			{
+				m_Output << L" " << Attributes.Data();
+			}
+			m_Output << L" = " << FormatType(Using.Type).Data();
+			break;
+		case ParsedUsing::EKind::UsingDeclaration:
+			m_Output << L"using ";
+			if (Attributes.Size() > 0)
+			{
+				m_Output << Attributes.Data() << L" ";
+			}
+			m_Output << FormatName(Using.Target).Data();
+			break;
+		case ParsedUsing::EKind::UsingDirective:
+			m_Output << L"using namespace ";
+			if (Attributes.Size() > 0)
+			{
+				m_Output << Attributes.Data() << L" ";
+			}
+			m_Output << FormatName(Using.Target).Data();
+			break;
 		}
+
 		m_Output << L";\n";
 		return true;
 	}
@@ -293,19 +524,70 @@ namespace CE
 		PrintFunctionText(L"OnParsed_Template");
 		PrintIndentText();
 		m_Output << L"template<";
-		String Parameters;
-		for (const ParsedTemplateParameter& Parameter : Template.Parameters) AppendSeparated(Parameters, FormatTemplateParameter(Parameter));
-		m_Output << Parameters.Data() << L">";
-		if (Template.HasRequires) m_Output << L" requires " << FormatExpression(Template.RequiresClause).Data();
+		for (size_t Index = 0; Index < Template.Parameters.Size(); ++Index)
+		{
+			if (Index > 0)
+			{
+				m_Output << L", ";
+			}
+
+			const ParsedTemplateParameter& Parameter = Template.Parameters[Index];
+			switch (Parameter.Kind)
+			{
+			case ParsedTemplateParameter::EKind::Type:
+				if (Parameter.Constraint.Segments.Size() > 0)
+				{
+					m_Output << FormatName(Parameter.Constraint).Data() << L" ";
+				}
+				else
+				{
+					m_Output << L"typename ";
+				}
+				break;
+			case ParsedTemplateParameter::EKind::NonType:
+			case ParsedTemplateParameter::EKind::TemplateTemplate:
+				m_Output << FormatType(Parameter.Type).Data() << L" ";
+				break;
+			}
+
+			if (Parameter.IsVariadic)
+			{
+				m_Output << L"...";
+			}
+			m_Output << Parameter.Name.Data();
+
+			if (Parameter.HasDefault)
+			{
+				m_Output << L" = ";
+				if (Parameter.Kind == ParsedTemplateParameter::EKind::NonType)
+				{
+					m_Output << Parameter.DefaultExpression.Text.Data();
+				}
+				else
+				{
+					m_Output << FormatType(Parameter.DefaultType).Data();
+				}
+			}
+		}
+		m_Output << L">";
+		if (Template.HasRequires)
+		{
+			m_Output << L" requires " << Template.RequiresClause.Text.Data();
+		}
 		m_Output << L"\n";
 		return true;
 	}
 
-	bool PrintParser::OnParsed_Concept(const ParsedTemplate& Concept)
+	bool PrintParser::OnParsed_Concept(const ParsedConcept& Concept)
 	{
 		PrintFunctionText(L"OnParsed_Concept");
 		PrintIndentText();
-		if (Concept.HasRequires) m_Output << L"requires " << FormatExpression(Concept.RequiresClause).Data() << L"\n";
+		String Attributes = FormatAttributes(Concept.Attributes);
+		if (Attributes.Size() > 0)
+		{
+			m_Output << Attributes.Data() << L" ";
+		}
+		m_Output << L"concept " << FormatName(Concept.Name).Data() << L" = " << Concept.Constraint.Text.Data() << L";\n";
 		return true;
 	}
 
@@ -313,10 +595,28 @@ namespace CE
 	{
 		PrintFunctionText(L"OnParsed_StaticAssert");
 		PrintIndentText();
-		m_Output << L"static_assert(" << FormatExpression(Assert.Condition).Data();
-		if (Assert.HasMessage) m_Output << L", " << FormatExpression(Assert.Message).Data();
+		m_Output << L"static_assert(" << Assert.Condition.Text.Data();
+		if (Assert.HasMessage)
+		{
+			m_Output << L", " << Assert.Message.Text.Data();
+		}
 		m_Output << L");\n";
 		return true;
+	}
+
+	bool PrintParser::HasFlag(EParsedVariableFlags Flags, EParsedVariableFlags Flag) const
+	{
+		return (static_cast<uint8>(Flags) & static_cast<uint8>(Flag)) != 0;
+	}
+
+	bool PrintParser::HasFlag(EParsedFunctionFlags Flags, EParsedFunctionFlags Flag) const
+	{
+		return (static_cast<uint16>(Flags) & static_cast<uint16>(Flag)) != 0;
+	}
+
+	bool PrintParser::HasFlag(EParsedTypeFlags Flags, EParsedTypeFlags Flag) const
+	{
+		return (static_cast<uint8>(Flags) & static_cast<uint8>(Flag)) != 0;
 	}
 
 	void PrintParser::PrintFunctionText(const String& Name)
@@ -326,9 +626,9 @@ namespace CE
 			return;
 		}
 		String AlignedName = Name;
-		if (AlignedName.Size() < 10)
+		if (AlignedName.Size() < 25)
 		{
-			AlignedName.Append(' ', 10 - AlignedName.Size());
+			AlignedName.Append(' ', 25 - AlignedName.Size());
 		}
 		m_Output << L"[" << AlignedName.Data() << L"] ";
 	}
@@ -342,229 +642,198 @@ namespace CE
 		}
 	}
 
-	bool PrintParser::HasFlag(EParsedTypeFlags Flags, EParsedTypeFlags Flag)
-	{
-		return (static_cast<uint8>(Flags) & static_cast<uint8>(Flag)) != 0;
-	}
-
-	bool PrintParser::HasFlag(EParsedVariableFlags Flags, EParsedVariableFlags Flag)
-	{
-		return (static_cast<uint8>(Flags) & static_cast<uint8>(Flag)) != 0;
-	}
-
-	bool PrintParser::HasFlag(EParsedFunctionFlags Flags, EParsedFunctionFlags Flag)
-	{
-		return (static_cast<uint32>(Flags) & static_cast<uint32>(Flag)) != 0;
-	}
-
-	void PrintParser::AppendSeparated(String& Output, const String& Value, const WChar* Separator)
-	{
-		if (Value.Size() == 0)
-		{
-			return;
-		}
-		if (Output.Size() > 0)
-		{
-			Output += Separator;
-		}
-		Output += Value;
-	}
-
-	String PrintParser::FormatExpression(const ParsedExpression& Expression)
-	{
-		return Expression.Text;
-	}
-
-	String PrintParser::FormatName(const ParsedName& Name)
-	{
-		String Result;
-		for (const ParsedNameSegment& Segment : Name.Segments)
-		{
-			if (Result.Size() > 0)
-			{
-				Result += L"::";
-			}
-			if (Segment.bIsInline)
-			{
-				Result += L"inline ";
-			}
-			Result += Segment.Name;
-			if (Segment.TemplateArguments.Size() > 0)
-			{
-				Result += L"<";
-				for (const ParsedTemplateArgument& Argument : Segment.TemplateArguments)
-				{
-					AppendSeparated(Result, FormatTemplateArgument(Argument));
-				}
-				Result += L">";
-			}
-		}
-		return Result;
-	}
-
-	String PrintParser::FormatAttribute(const ParsedAttribute& Attribute)
-	{
-		String Arguments;
-		for (const ParsedExpression& Argument : Attribute.Arguments)
-		{
-			AppendSeparated(Arguments, FormatExpression(Argument));
-		}
-
-		const String Name = FormatName(Attribute.Name);
-		switch (Attribute.Kind)
-		{
-		case ParsedAttribute::EKind::Declspec:
-			return L"__declspec(" + Name + (Arguments.Size() > 0 ? L"(" + Arguments + L")" : L"") + L")";
-		case ParsedAttribute::EKind::Gnu:
-			return L"__attribute__((" + Name + (Arguments.Size() > 0 ? L"(" + Arguments + L")" : L"") + L"))";
-		case ParsedAttribute::EKind::Alignas:
-			return L"alignas(" + (Arguments.Size() > 0 ? Arguments : Name) + L")";
-		default:
-			return L"[[" + Name + (Arguments.Size() > 0 ? L"(" + Arguments + L")" : L"") + L"]]";
-		}
-	}
-
-	String PrintParser::FormatAttributes(const Array<ParsedAttribute>& Attributes)
+	String PrintParser::FormatAttributes(const Array<ParsedAttribute>& Attributes) const
 	{
 		String Result;
 		for (const ParsedAttribute& Attribute : Attributes)
 		{
-			AppendSeparated(Result, FormatAttribute(Attribute), L" ");
+			if (Result.Size() > 0)
+			{
+				Result.Append(L" ");
+			}
+
+			switch (Attribute.Kind)
+			{
+			case ParsedAttribute::EKind::Standard:
+				Result.Append(L"[[");
+				break;
+			case ParsedAttribute::EKind::Declspec:
+				Result.Append(L"__declspec(");
+				break;
+			case ParsedAttribute::EKind::Gnu:
+				Result.Append(L"__attribute__((");
+				break;
+			case ParsedAttribute::EKind::Alignas:
+				Result.Append(L"alignas(");
+				break;
+			case ParsedAttribute::EKind::Other:
+				break;
+			}
+
+			Result.Append(FormatName(Attribute.Name));
+			const bool HasArguments = Attribute.Arguments.Size() > 0;
+			const bool ArgumentsFollowName = HasArguments && Attribute.Name.Segments.Size() > 0;
+			if (ArgumentsFollowName)
+			{
+				Result.Append(L"(");
+			}
+			if (HasArguments)
+			{
+				for (size_t Index = 0; Index < Attribute.Arguments.Size(); ++Index)
+				{
+					if (Index > 0)
+					{
+						Result.Append(L", ");
+					}
+					Result.Append(Attribute.Arguments[Index].Text);
+				}
+			}
+			if (ArgumentsFollowName)
+			{
+				Result.Append(L")");
+			}
+
+			switch (Attribute.Kind)
+			{
+			case ParsedAttribute::EKind::Standard:
+				Result.Append(L"]]");
+				break;
+			case ParsedAttribute::EKind::Declspec:
+			case ParsedAttribute::EKind::Alignas:
+				Result.Append(L")");
+				break;
+			case ParsedAttribute::EKind::Gnu:
+				Result.Append(L"))");
+				break;
+			case ParsedAttribute::EKind::Other:
+				break;
+			}
 		}
 		return Result;
 	}
 
-	String PrintParser::FormatType(const ParsedType& Type, const String& Declarator)
+	String PrintParser::FormatName(const ParsedName& Name) const
 	{
-		String Result = FormatAttributes(Type.Attributes);
-		if (Result.Size() > 0)
+		String Result;
+		for (size_t SegmentIndex = 0; SegmentIndex < Name.Segments.Size(); ++SegmentIndex)
 		{
-			Result += L" ";
+			if (SegmentIndex > 0)
+			{
+				Result.Append(L"::");
+			}
+
+			const ParsedNameSegment& Segment = Name.Segments[SegmentIndex];
+			if (Segment.bIsInline)
+			{
+				Result.Append(L"inline ");
+			}
+			Result.Append(Segment.Name);
+
+			if (Segment.TemplateArguments.Size() > 0)
+			{
+				Result.Append(L"<");
+				for (size_t ArgumentIndex = 0; ArgumentIndex < Segment.TemplateArguments.Size(); ++ArgumentIndex)
+				{
+					if (ArgumentIndex > 0)
+					{
+						Result.Append(L", ");
+					}
+
+					const ParsedTemplateArgument& Argument = Segment.TemplateArguments[ArgumentIndex];
+					if (Argument.Kind == ParsedTemplateArgument::EKind::Type)
+					{
+						Result.Append(FormatType(Argument.Type));
+					}
+					else
+					{
+						Result.Append(Argument.Expression.Text);
+					}
+				}
+				Result.Append(L">");
+			}
 		}
-		if (HasFlag(Type.Flags, EParsedTypeFlags::IsConst)) Result += L"const ";
-		if (HasFlag(Type.Flags, EParsedTypeFlags::IsVolatile)) Result += L"volatile ";
-		if (HasFlag(Type.Flags, EParsedTypeFlags::IsMutable)) Result += L"mutable ";
-		if (HasFlag(Type.Flags, EParsedTypeFlags::IsUnsigned)) Result += L"unsigned ";
-		if (HasFlag(Type.Flags, EParsedTypeFlags::IsSigned)) Result += L"signed ";
-		Result += FormatName(Type.Name);
+		return Result;
+	}
+
+	String PrintParser::FormatType(const ParsedType& Type) const
+	{
+		String Result;
+		const auto AppendSpecifier = [&Result](const WChar* Specifier)
+		{
+			if (Result.Size() > 0)
+			{
+				Result.Append(L" ");
+			}
+			Result.Append(Specifier);
+		};
+
+		if (HasFlag(Type.Flags, EParsedTypeFlags::IsConst))
+		{
+			AppendSpecifier(L"const");
+		}
+		if (HasFlag(Type.Flags, EParsedTypeFlags::IsVolatile))
+		{
+			AppendSpecifier(L"volatile");
+		}
+		if (HasFlag(Type.Flags, EParsedTypeFlags::IsMutable))
+		{
+			AppendSpecifier(L"mutable");
+		}
+		if (HasFlag(Type.Flags, EParsedTypeFlags::IsUnsigned))
+		{
+			AppendSpecifier(L"unsigned");
+		}
+		if (HasFlag(Type.Flags, EParsedTypeFlags::IsSigned))
+		{
+			AppendSpecifier(L"signed");
+		}
+
+		const String Attributes = FormatAttributes(Type.Attributes);
+		if (Attributes.Size() > 0)
+		{
+			AppendSpecifier(Attributes.Data());
+		}
+		if (Type.Name.Segments.Size() > 0)
+		{
+			AppendSpecifier(FormatName(Type.Name).Data());
+		}
 
 		for (const ParsedIndirection& Indirection : Type.Indirections)
 		{
 			switch (Indirection.Kind)
 			{
-			case ParsedIndirection::EKind::Pointer: Result += L"*"; break;
-			case ParsedIndirection::EKind::LReference: Result += L"&"; break;
-			case ParsedIndirection::EKind::RReference: Result += L"&&"; break;
+			case ParsedIndirection::EKind::Pointer:
+				Result.Append(L"*");
+				break;
+			case ParsedIndirection::EKind::LReference:
+				Result.Append(L"&");
+				break;
+			case ParsedIndirection::EKind::RReference:
+				Result.Append(L"&&");
+				break;
 			}
-			if (Indirection.IsConst) Result += L" const";
-			if (Indirection.IsVolatile) Result += L" volatile";
-			if (Indirection.IsMutable) Result += L" mutable";
+
+			if (Indirection.IsConst)
+			{
+				Result.Append(L" const");
+			}
+			if (Indirection.IsVolatile)
+			{
+				Result.Append(L" volatile");
+			}
+			if (Indirection.IsMutable)
+			{
+				Result.Append(L" mutable");
+			}
 		}
 
-		if (Declarator.Size() > 0)
-		{
-			if (Result.Size() > 0)
-			{
-				Result += L" ";
-			}
-			Result += Declarator;
-		}
 		for (const ParsedExpression& Extent : Type.ArrayExtents)
 		{
-			Result += L"[" + FormatExpression(Extent) + L"]";
+			Result.Append(L"[");
+			Result.Append(Extent.Text);
+			Result.Append(L"]");
 		}
-		return Result;
-	}
 
-	String PrintParser::FormatTemplateArgument(const ParsedTemplateArgument& Argument)
-	{
-		return Argument.Kind == ParsedTemplateArgument::EKind::Type ? FormatType(Argument.Type) : FormatExpression(Argument.Expression);
-	}
-
-	String PrintParser::FormatParameter(const ParsedFunctionParameter& Parameter)
-	{
-		if (Parameter.IsVariadic)
-		{
-			return L"...";
-		}
-		String Result = FormatAttributes(Parameter.Attributes);
-		if (Result.Size() > 0)
-		{
-			Result += L" ";
-		}
-		Result += FormatType(Parameter.Type, FormatName(Parameter.Name));
-		if (Parameter.HasDefaultValue)
-		{
-			Result += L" = " + FormatExpression(Parameter.DefaultValue);
-		}
-		return Result;
-	}
-
-	String PrintParser::FormatTemplateParameter(const ParsedTemplateParameter& Parameter)
-	{
-		String Result;
-		switch (Parameter.Kind)
-		{
-		case ParsedTemplateParameter::EKind::Type:
-			Result = FormatName(Parameter.Constraint);
-			if (Result.Size() > 0) Result += L" ";
-			Result += L"typename";
-			break;
-		case ParsedTemplateParameter::EKind::NonType:
-			Result = FormatType(Parameter.Type);
-			break;
-		case ParsedTemplateParameter::EKind::TemplateTemplate:
-			Result = L"template<typename> class";
-			break;
-		}
-		if (Parameter.IsVariadic) Result += L"...";
-		if (Parameter.Name.Size() > 0) Result += L" " + Parameter.Name;
-		if (Parameter.HasDefault)
-		{
-			const String Default = Parameter.Kind == ParsedTemplateParameter::EKind::NonType ? FormatExpression(Parameter.DefaultExpression) : FormatType(Parameter.DefaultType);
-			Result += L" = " + Default;
-		}
-		return Result;
-	}
-
-	String PrintParser::FormatFunctionSuffix(const ParsedFunctionBase& Function)
-	{
-		String Result;
-		for (const String& Qualifier : Function.Qualifiers)
-		{
-			Result += L" " + Qualifier;
-		}
-		if (HasFlag(Function.Flags, EParsedFunctionFlags::IsNoexcept))
-		{
-			Result += L" noexcept";
-			if (Function.NoexceptExpression.Text.Size() > 0) Result += L"(" + FormatExpression(Function.NoexceptExpression) + L")";
-		}
-		if (HasFlag(Function.Flags, EParsedFunctionFlags::HasRequires)) Result += L" requires " + FormatExpression(Function.RequiresClause);
-		return Result;
-	}
-
-	void PrintParser::AppendFunctionPrefix(String& Result, const ParsedFunctionBase& Function)
-	{
-		if (HasFlag(Function.Flags, EParsedFunctionFlags::IsStatic)) Result += L"static ";
-		if (HasFlag(Function.Flags, EParsedFunctionFlags::IsInline)) Result += L"inline ";
-		if (HasFlag(Function.Flags, EParsedFunctionFlags::IsVirtual)) Result += L"virtual ";
-		if (HasFlag(Function.Flags, EParsedFunctionFlags::IsExplicit)) Result += L"explicit ";
-		if (HasFlag(Function.Flags, EParsedFunctionFlags::IsConstexpr)) Result += L"constexpr ";
-		if (HasFlag(Function.Flags, EParsedFunctionFlags::IsConsteval)) Result += L"consteval ";
-		for (const String& Specifier : Function.Specifiers) Result += Specifier + L" ";
-	}
-
-	String PrintParser::FormatFunction(const ParsedFunctionBase& Function, const String& Declaration)
-	{
-		String Result = FormatAttributes(Function.Attributes);
-		if (Result.Size() > 0) Result += L" ";
-		AppendFunctionPrefix(Result, Function);
-		Result += Declaration + L"(";
-		for (const ParsedFunctionParameter& Parameter : Function.Parameters) AppendSeparated(Result, FormatParameter(Parameter));
-		Result += L")" + FormatFunctionSuffix(Function);
-		if (HasFlag(Function.Flags, EParsedFunctionFlags::IsPureVirtual)) Result += L" = 0";
-		else if (HasFlag(Function.Flags, EParsedFunctionFlags::IsDefaulted)) Result += L" = default";
-		else if (HasFlag(Function.Flags, EParsedFunctionFlags::IsDeleted)) Result += L" = delete";
 		return Result;
 	}
 }

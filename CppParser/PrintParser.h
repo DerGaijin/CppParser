@@ -27,45 +27,34 @@ namespace CE
 		virtual bool OnParsed_Operator(const ParsedOperator& Operator);
 		virtual bool OnParsed_Using(const ParsedUsing& Using);
 		virtual bool OnParsed_Template(const ParsedTemplate& Template);
-		virtual bool OnParsed_Concept(const ParsedTemplate& Concept);
+		virtual bool OnParsed_Concept(const ParsedConcept& Concept);
 		virtual bool OnParsed_StaticAssert(const ParsedStaticAssert& Assert);
 
-
 	private:
-		static bool HasFlag(EParsedTypeFlags Flags, EParsedTypeFlags Flag);
-		static bool HasFlag(EParsedVariableFlags Flags, EParsedVariableFlags Flag);
-		static bool HasFlag(EParsedFunctionFlags Flags, EParsedFunctionFlags Flag);
-		static void AppendSeparated(String& Output, const String& Value, const WChar* Separator = L", ");
-		static String FormatExpression(const ParsedExpression& Expression);
-		static String FormatName(const ParsedName& Name);
-		static String FormatAttribute(const ParsedAttribute& Attribute);
-		static String FormatAttributes(const Array<ParsedAttribute>& Attributes);
-		static String FormatType(const ParsedType& Type, const String& Declarator = L"");
-		static String FormatTemplateArgument(const ParsedTemplateArgument& Argument);
-		static String FormatParameter(const ParsedFunctionParameter& Parameter);
-		static String FormatTemplateParameter(const ParsedTemplateParameter& Parameter);
-		static String FormatFunctionSuffix(const ParsedFunctionBase& Function);
-		static void AppendFunctionPrefix(String& Result, const ParsedFunctionBase& Function);
-		static String FormatFunction(const ParsedFunctionBase& Function, const String& Declaration);
-
+		bool HasFlag(EParsedVariableFlags Flags, EParsedVariableFlags Flag) const;
+		bool HasFlag(EParsedFunctionFlags Flags, EParsedFunctionFlags Flag) const;
+		bool HasFlag(EParsedTypeFlags Flags, EParsedTypeFlags Flag) const;
+		bool PrintParsedFunction(const String& CallbackName, const ParsedFunctionBase& Function, const ParsedType* ReturnType = nullptr, const String* OperatorSymbol = nullptr, bool IsTrailingReturnType = false);
 		void PrintFunctionText(const String& Name);
 		void PrintIndentText(int32 Shift = 0);
+		String FormatAttributes(const Array<ParsedAttribute>& Attributes) const;
+		String FormatName(const ParsedName& Name) const;
+		String FormatType(const ParsedType& Type) const;
 
 
 	public:
-		bool PrintFunction = true;
+		bool PrintFunction = false;
 
 
 	private:
 		std::wostream& m_Output;
 
-		struct ScopeInfo 
+		struct ScopeInfo
 		{
 			bool RequiresSemicolon = false;
-			ParsedType Type;
+			ParsedName Name;
 		};
 		Array<ScopeInfo> m_Scopes;
 		ScopeInfo m_LastClosedScope;
-		size_t m_AnonymousTypeCount = 0;
 	};
 }
