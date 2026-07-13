@@ -18,6 +18,15 @@ namespace CE
 		Union,
 	};
 
+	enum class EParsedElaboratedType : uint8
+	{
+		None,
+		Class,
+		Struct,
+		Union,
+		Enum,
+	};
+
 	struct ParsedExpression
 	{
 		String Text;
@@ -75,14 +84,17 @@ namespace CE
 		IsMutable = 1 << 2,
 		IsUnsigned = 1 << 3,
 		IsSigned = 1 << 4,
+		IsDecltype = 1 << 5,
 	};
 
 	struct ParsedType
 	{
+		EParsedElaboratedType ElaboratedType = EParsedElaboratedType::None;
 		ParsedName Name;
 		Array<ParsedAttribute> Attributes;
 		Array<ParsedIndirection> Indirections;
 		Array<ParsedExpression> ArrayExtents;
+		ParsedExpression Decltype;
 		EParsedTypeFlags Flags = EParsedTypeFlags::None;
 	};
 
@@ -285,5 +297,11 @@ namespace CE
 		ParsedExpression Condition;
 		ParsedExpression Message;
 		bool HasMessage = false;
+	};
+
+	struct ParsedLinkage
+	{
+		String Language;
+		bool HasBody = false;
 	};
 }

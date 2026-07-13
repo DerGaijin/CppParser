@@ -604,6 +604,21 @@ namespace CE
 		return true;
 	}
 
+	bool PrintParser::OnParsed_Linkage(const ParsedLinkage& Linkage)
+	{
+		PrintFunctionText(L"OnParsed_Linkage");
+		PrintIndentText();
+		m_Output << L"extern \"" << Linkage.Language.Data() << L"\"" << "\n";
+		if (Linkage.HasBody)
+		{
+			PrintFunctionText(L"OnParsed_Linkage");
+			PrintIndentText();
+			m_Output << L"{\n";
+			m_Scopes.Emplace();
+		}
+		return true;
+	}
+
 	bool PrintParser::HasFlag(EParsedVariableFlags Flags, EParsedVariableFlags Flag) const
 	{
 		return (static_cast<uint8>(Flags) & static_cast<uint8>(Flag)) != 0;
@@ -759,13 +774,13 @@ namespace CE
 	{
 		String Result;
 		const auto AppendSpecifier = [&Result](const WChar* Specifier)
-		{
-			if (Result.Size() > 0)
 			{
-				Result.Append(L" ");
-			}
-			Result.Append(Specifier);
-		};
+				if (Result.Size() > 0)
+				{
+					Result.Append(L" ");
+				}
+				Result.Append(Specifier);
+			};
 
 		if (HasFlag(Type.Flags, EParsedTypeFlags::IsConst))
 		{
@@ -787,13 +802,35 @@ namespace CE
 		{
 			AppendSpecifier(L"signed");
 		}
+		if (HasFlag(Type.Flags, EParsedTypeFlags::IsDecltype))
+		{
+			String DecltypeSpecifier = L"decltype(";
+			DecltypeSpecifier.Append(Type.Decltype.Text);
+			DecltypeSpecifier.Append(L")");
+			AppendSpecifier(DecltypeSpecifier.Data());
+		}
 
 		const String Attributes = FormatAttributes(Type.Attributes);
 		if (Attributes.Size() > 0)
 		{
 			AppendSpecifier(Attributes.Data());
 		}
-		if (Type.Name.Segments.Size() > 0)
+		switch (Type.ElaboratedType)
+		{
+		case EParsedElaboratedType::Class:
+			m_Output << L"class ";
+			break;
+		case EParsedElaboratedType::Struct:
+			m_Output << L"struct ";
+			break;
+		case EParsedElaboratedType::Union:
+			m_Output << L"union ";
+			break;
+		case EParsedElaboratedType::Enum:
+			m_Output << L"enum ";
+			break;
+		}
+		if (!HasFlag(Type.Flags, EParsedTypeFlags::IsDecltype) && Type.Name.Segments.Size() > 0)
 		{
 			AppendSpecifier(FormatName(Type.Name).Data());
 		}

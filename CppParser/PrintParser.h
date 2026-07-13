@@ -29,6 +29,8 @@ namespace CE
 		virtual bool OnParsed_Template(const ParsedTemplate& Template);
 		virtual bool OnParsed_Concept(const ParsedConcept& Concept);
 		virtual bool OnParsed_StaticAssert(const ParsedStaticAssert& Assert);
+		virtual bool OnParsed_Linkage(const ParsedLinkage& Linkage);
+
 
 	private:
 		bool HasFlag(EParsedVariableFlags Flags, EParsedVariableFlags Flag) const;
