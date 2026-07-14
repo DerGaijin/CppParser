@@ -41,7 +41,8 @@ namespace CE
 		void PrintIndentText(int32 Shift = 0);
 		String FormatAttributes(const Array<ParsedAttribute>& Attributes) const;
 		String FormatName(const ParsedName& Name) const;
-		String FormatType(const ParsedType& Type) const;
+		String FormatType(const ParsedType& Type, bool IncludeArrayExtents = true) const;
+		void PrintArrayExtents(const ParsedType& Type);
 
 
 	public:

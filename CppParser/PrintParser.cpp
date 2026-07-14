@@ -1,5 +1,6 @@
 #include "PrintParser.h"
 
+#include <cwctype>
 #include <string>
 
 namespace CE
@@ -138,7 +139,7 @@ namespace CE
 				const ParsedTemplateArgument& Argument = Class.Specialization[Index];
 				if (Argument.Kind == ParsedTemplateArgument::EKind::Type)
 				{
-					m_Output << FormatName(Argument.Type.Name).Data();
+					m_Output << FormatType(Argument.Type).Data();
 				}
 				else
 				{
@@ -285,6 +286,11 @@ namespace CE
 	{
 		PrintFunctionText(L"OnParsed_Variable");
 		PrintIndentText();
+		if (Value.RawDeclaration.Text.Size() > 0)
+		{
+			m_Output << Value.RawDeclaration.Text.Data() << L";\n";
+			return true;
+		}
 		String Attributes = FormatAttributes(Value.Attributes);
 		if (Attributes.Size() > 0)
 		{
@@ -315,7 +321,8 @@ namespace CE
 			m_Output << L"consteval ";
 		}
 
-		m_Output << FormatType(Value.Type).Data() << L" " << FormatName(Value.Name).Data();
+		m_Output << FormatType(Value.Type, false).Data() << L" " << FormatName(Value.Name).Data();
+		PrintArrayExtents(Value.Type);
 		if (HasFlag(Value.Flags, EParsedVariableFlags::HasInitializer))
 		{
 			m_Output << (HasFlag(Value.Flags, EParsedVariableFlags::IsBitfield) ? L" : " : L" = ") << Value.Initializer.Text.Data();
@@ -341,7 +348,8 @@ namespace CE
 
 	bool PrintParser::OnParsed_Operator(const ParsedOperator& Operator)
 	{
-		return PrintParsedFunction(L"OnParsed_Operator", Operator, &Operator.ReturnType, &Operator.Symbol, Operator.IsTrailingType);
+		const bool HasReturnType = Operator.ReturnType.Name.Segments.Size() > 0 || HasFlag(Operator.ReturnType.Flags, EParsedTypeFlags::IsDecltype);
+		return PrintParsedFunction(L"OnParsed_Operator", Operator, HasReturnType ? &Operator.ReturnType : nullptr, &Operator.Symbol, Operator.IsTrailingType);
 	}
 
 	bool PrintParser::PrintParsedFunction(const String& CallbackName, const ParsedFunctionBase& Function, const ParsedType* ReturnType, const String* OperatorSymbol, bool IsTrailingReturnType)
@@ -385,7 +393,12 @@ namespace CE
 		}
 		if (OperatorSymbol != nullptr && OperatorSymbol->Size() > 0)
 		{
-			m_Output << L"operator" << OperatorSymbol->Data();
+			m_Output << L"operator";
+			if (std::iswalpha((*OperatorSymbol)[0]))
+			{
+				m_Output << L" ";
+			}
+			m_Output << OperatorSymbol->Data();
 		}
 		else
 		{
@@ -412,11 +425,12 @@ namespace CE
 			}
 			else
 			{
-				m_Output << FormatType(Parameter.Type).Data();
+				m_Output << FormatType(Parameter.Type, false).Data();
 				if (Parameter.Name.Segments.Size() > 0)
 				{
 					m_Output << L" " << FormatName(Parameter.Name).Data();
 				}
+				PrintArrayExtents(Parameter.Type);
 			}
 			if (Parameter.HasDefaultValue)
 			{
@@ -478,6 +492,11 @@ namespace CE
 	{
 		PrintFunctionText(L"OnParsed_Using");
 		PrintIndentText();
+		if (Using.RawDeclaration.Text.Size() > 0)
+		{
+			m_Output << (Using.Kind == ParsedUsing::EKind::Typedef ? L"typedef " : L"using ") << Using.RawDeclaration.Text.Data() << L";\n";
+			return true;
+		}
 
 		String Attributes = FormatAttributes(Using.Attributes);
 		switch (Using.Kind)
@@ -770,7 +789,7 @@ namespace CE
 		return Result;
 	}
 
-	String PrintParser::FormatType(const ParsedType& Type) const
+	String PrintParser::FormatType(const ParsedType& Type, bool IncludeArrayExtents) const
 	{
 		String Result;
 		const auto AppendSpecifier = [&Result](const WChar* Specifier)
@@ -818,16 +837,18 @@ namespace CE
 		switch (Type.ElaboratedType)
 		{
 		case EParsedElaboratedType::Class:
-			m_Output << L"class ";
+			AppendSpecifier(L"class");
 			break;
 		case EParsedElaboratedType::Struct:
-			m_Output << L"struct ";
+			AppendSpecifier(L"struct");
 			break;
 		case EParsedElaboratedType::Union:
-			m_Output << L"union ";
+			AppendSpecifier(L"union");
 			break;
 		case EParsedElaboratedType::Enum:
-			m_Output << L"enum ";
+			AppendSpecifier(L"enum");
+			break;
+		default:
 			break;
 		}
 		if (!HasFlag(Type.Flags, EParsedTypeFlags::IsDecltype) && Type.Name.Segments.Size() > 0)
@@ -864,13 +885,24 @@ namespace CE
 			}
 		}
 
-		for (const ParsedExpression& Extent : Type.ArrayExtents)
+		if (IncludeArrayExtents)
 		{
-			Result.Append(L"[");
-			Result.Append(Extent.Text);
-			Result.Append(L"]");
+			for (const ParsedExpression& Extent : Type.ArrayExtents)
+			{
+				Result.Append(L"[");
+				Result.Append(Extent.Text);
+				Result.Append(L"]");
+			}
 		}
 
 		return Result;
+	}
+
+	void PrintParser::PrintArrayExtents(const ParsedType& Type)
+	{
+		for (const ParsedExpression& Extent : Type.ArrayExtents)
+		{
+			m_Output << L"[" << Extent.Text.Data() << L"]";
+		}
 	}
 }
