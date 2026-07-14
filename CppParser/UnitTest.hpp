@@ -1,5 +1,6 @@
 #pragma once
 
+#define TEST_ALL
 
 #if defined(TEST_INCLUDES) || defined(TEST_ALL)
 #include <string>

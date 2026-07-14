@@ -39,6 +39,7 @@ namespace CE
 		bool PrintParsedFunction(const String& CallbackName, const ParsedFunctionBase& Function, const ParsedType* ReturnType = nullptr, const String* OperatorSymbol = nullptr, bool IsTrailingReturnType = false);
 		void PrintFunctionText(const String& Name);
 		void PrintIndentText(int32 Shift = 0);
+		String MakeUnnamedTypeName();
 		String FormatAttributes(const Array<ParsedAttribute>& Attributes) const;
 		String FormatName(const ParsedName& Name) const;
 		String FormatType(const ParsedType& Type, bool IncludeArrayExtents = true) const;
@@ -59,5 +60,6 @@ namespace CE
 		};
 		Array<ScopeInfo> m_Scopes;
 		ScopeInfo m_LastClosedScope;
+		size_t m_NextUnnamedType = 0;
 	};
 }

@@ -96,6 +96,13 @@ namespace CE
 
 	bool PrintParser::OnParsed_Class(const ParsedClass& Class)
 	{
+		ParsedName Name = Class.Name;
+		if (Class.IsAnonymous)
+		{
+			ParsedNameSegment Segment;
+			Segment.Name = MakeUnnamedTypeName();
+			Name.Segments.Add(std::move(Segment));
+		}
 		PrintFunctionText(L"OnParsed_Class");
 		PrintIndentText();
 		if (Class.IsFriend)
@@ -121,10 +128,7 @@ namespace CE
 		{
 			m_Output << L" " << Attributes.Data();
 		}
-		if (!Class.IsAnonymous)
-		{
-			m_Output << L" " << FormatName(Class.Name).Data();
-		}
+		m_Output << L" " << FormatName(Name).Data();
 
 		if (Class.Specialization.Size() > 0)
 		{
@@ -197,7 +201,7 @@ namespace CE
 		m_Output << L"{\n";
 		m_Scopes.Emplace();
 		m_Scopes[m_Scopes.Size() - 1].RequiresSemicolon = true;
-		m_Scopes[m_Scopes.Size() - 1].Name = Class.Name;
+		m_Scopes[m_Scopes.Size() - 1].Name = std::move(Name);
 		return true;
 	}
 
@@ -223,6 +227,13 @@ namespace CE
 
 	bool PrintParser::OnParsed_Enum(const ParsedEnum& Enum)
 	{
+		ParsedName Name = Enum.Name;
+		if (Enum.IsAnonymous)
+		{
+			ParsedNameSegment Segment;
+			Segment.Name = MakeUnnamedTypeName();
+			Name.Segments.Add(std::move(Segment));
+		}
 		PrintFunctionText(L"OnParsed_Enum");
 		PrintIndentText();
 		m_Output << L"enum";
@@ -236,10 +247,7 @@ namespace CE
 		{
 			m_Output << L" " << Attributes.Data();
 		}
-		if (!Enum.IsAnonymous)
-		{
-			m_Output << L" " << FormatName(Enum.Name).Data();
-		}
+		m_Output << L" " << FormatName(Name).Data();
 		if (Enum.UnderlyingType.Name.Segments.Size() > 0)
 		{
 			m_Output << L" : " << FormatType(Enum.UnderlyingType).Data();
@@ -257,7 +265,7 @@ namespace CE
 		m_Output << L"{\n";
 		m_Scopes.Emplace();
 		m_Scopes[m_Scopes.Size() - 1].RequiresSemicolon = true;
-		m_Scopes[m_Scopes.Size() - 1].Name = Enum.Name;
+		m_Scopes[m_Scopes.Size() - 1].Name = std::move(Name);
 		return true;
 	}
 
@@ -316,7 +324,17 @@ namespace CE
 			m_Output << L"consteval ";
 		}
 
-		m_Output << FormatType(Value.Type, false).Data() << L" " << FormatName(Value.Name).Data();
+		ParsedType Type = Value.Type;
+		if (Type.Name.Segments.Size() == 0 && Type.ElaboratedType != EParsedElaboratedType::None && m_LastClosedScope.RequiresSemicolon && m_LastClosedScope.Name.Segments.Size() > 0)
+		{
+			Type.Name = m_LastClosedScope.Name;
+		}
+		String TypeText = FormatType(Type, false);
+		if (TypeText.Size() > 0)
+		{
+			m_Output << TypeText.Data() << L" ";
+		}
+		m_Output << FormatName(Value.Name).Data();
 		PrintArrayExtents(Value.Type);
 		if (HasFlag(Value.Flags, EParsedVariableFlags::HasInitializer))
 		{
@@ -663,6 +681,14 @@ namespace CE
 		{
 			m_Output << String('\t', static_cast<size_t>(Indentation)).Data();
 		}
+	}
+
+	String PrintParser::MakeUnnamedTypeName()
+	{
+		String Result = L"__UNNAMED_";
+		Result.Append(std::to_wstring(++m_NextUnnamedType));
+		Result.Append(L"__");
+		return Result;
 	}
 
 	String PrintParser::FormatAttributes(const Array<ParsedAttribute>& Attributes) const
