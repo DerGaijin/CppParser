@@ -286,11 +286,6 @@ namespace CE
 	{
 		PrintFunctionText(L"OnParsed_Variable");
 		PrintIndentText();
-		if (Value.RawDeclaration.Text.Size() > 0)
-		{
-			m_Output << Value.RawDeclaration.Text.Data() << L";\n";
-			return true;
-		}
 		String Attributes = FormatAttributes(Value.Attributes);
 		if (Attributes.Size() > 0)
 		{
@@ -492,12 +487,6 @@ namespace CE
 	{
 		PrintFunctionText(L"OnParsed_Using");
 		PrintIndentText();
-		if (Using.RawDeclaration.Text.Size() > 0)
-		{
-			m_Output << (Using.Kind == ParsedUsing::EKind::Typedef ? L"typedef " : L"using ") << Using.RawDeclaration.Text.Data() << L";\n";
-			return true;
-		}
-
 		String Attributes = FormatAttributes(Using.Attributes);
 		switch (Using.Kind)
 		{
