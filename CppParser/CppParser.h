@@ -30,6 +30,7 @@ namespace CE
 		virtual bool OnParsed_Template(const ParsedTemplate& Template) { return true; }
 		virtual bool OnParsed_Concept(const ParsedConcept& Concept) { return true; }
 		virtual bool OnParsed_StaticAssert(const ParsedStaticAssert& Assert) { return true; }
+		virtual bool OnParsed_Linkage(const ParsedLinkage& Linkage) { return true; }
 
 	};
 }

@@ -13,23 +13,23 @@ namespace CE
 
 	protected:
 		virtual void OnParseBegin() override;
-		virtual bool OnParsed_Namespace(const Array<ParsedNamespace>& Namespaces);
-		virtual bool OnParsed_NamespaceAlias(const ParsedNamespaceAlias& Alias);
-		virtual bool OnParsed_ScopeEnd();
-		virtual bool OnParsed_Class(const ParsedClass& Class);
-		virtual bool OnParsed_Access(EAccessSpecifier Access);
-		virtual bool OnParsed_Enum(const ParsedEnum& Enum);
-		virtual bool OnParsed_EnumValue(const ParsedEnumValue& Value);
-		virtual bool OnParsed_Variable(const ParsedVariable& Value);
-		virtual bool OnParsed_Constructor(const ParsedConstructor& Constructor);
-		virtual bool OnParsed_Destructor(const ParsedDestructor& Destructor);
-		virtual bool OnParsed_Function(const ParsedFunction& Function);
-		virtual bool OnParsed_Operator(const ParsedOperator& Operator);
-		virtual bool OnParsed_Using(const ParsedUsing& Using);
-		virtual bool OnParsed_Template(const ParsedTemplate& Template);
-		virtual bool OnParsed_Concept(const ParsedConcept& Concept);
-		virtual bool OnParsed_StaticAssert(const ParsedStaticAssert& Assert);
-		virtual bool OnParsed_Linkage(const ParsedLinkage& Linkage);
+		virtual bool OnParsed_Namespace(const Array<ParsedNamespace>& Namespaces) override;
+		virtual bool OnParsed_NamespaceAlias(const ParsedNamespaceAlias& Alias) override;
+		virtual bool OnParsed_ScopeEnd() override;
+		virtual bool OnParsed_Class(const ParsedClass& Class) override;
+		virtual bool OnParsed_Access(EAccessSpecifier Access) override;
+		virtual bool OnParsed_Enum(const ParsedEnum& Enum) override;
+		virtual bool OnParsed_EnumValue(const ParsedEnumValue& Value) override;
+		virtual bool OnParsed_Variable(const ParsedVariable& Value) override;
+		virtual bool OnParsed_Constructor(const ParsedConstructor& Constructor) override;
+		virtual bool OnParsed_Destructor(const ParsedDestructor& Destructor) override;
+		virtual bool OnParsed_Function(const ParsedFunction& Function) override;
+		virtual bool OnParsed_Operator(const ParsedOperator& Operator) override;
+		virtual bool OnParsed_Using(const ParsedUsing& Using) override;
+		virtual bool OnParsed_Template(const ParsedTemplate& Template) override;
+		virtual bool OnParsed_Concept(const ParsedConcept& Concept) override;
+		virtual bool OnParsed_StaticAssert(const ParsedStaticAssert& Assert) override;
+		virtual bool OnParsed_Linkage(const ParsedLinkage& Linkage) override;
 
 
 	private:
