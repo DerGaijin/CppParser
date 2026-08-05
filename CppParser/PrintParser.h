@@ -13,7 +13,7 @@ namespace CE
 
 	protected:
 		virtual void OnParseBegin() override;
-		virtual bool OnParsed_Namespace(const Array<ParsedNamespace>& Namespaces) override;
+		virtual bool OnParsed_Namespace(const ParsedNamespace& Namespace) override;
 		virtual bool OnParsed_NamespaceAlias(const ParsedNamespaceAlias& Alias) override;
 		virtual bool OnParsed_ScopeEnd() override;
 		virtual bool OnParsed_Class(const ParsedClass& Class) override;

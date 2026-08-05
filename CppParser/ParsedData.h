@@ -38,7 +38,7 @@ namespace CE
 	{
 		String Name;
 		Array<ParsedTemplateArgument> TemplateArguments;
-		bool bIsInline = false;
+		bool IsInline = false;
 	};
 
 	struct ParsedName
@@ -113,9 +113,8 @@ namespace CE
 
 	struct ParsedNamespace
 	{
-		String Name;
+		ParsedName Name;
 		Array<ParsedAttribute> Attributes;
-		bool IsInline = false;
 	};
 
 	struct ParsedNamespaceAlias

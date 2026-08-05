@@ -1,6 +1,7 @@
 #pragma once
 
-#define TEST_ALL
+#define TEST_NAMESPACES
+#define TEST_NAMESPACE_ALIAS
 
 #if defined(TEST_INCLUDES) || defined(TEST_ALL)
 #include <string>
@@ -11,7 +12,6 @@
 #if defined(TEST_NAMESPACES) || defined(TEST_ALL)
 namespace TestNamespace1 {}
 namespace {}
-inline namespace TestNamespace2 {}
 inline namespace TestNamespace2 {}
 namespace TestNamespace3 { namespace TestNamespace4 {} }
 namespace TestNamespace5::TestNamespace6::TestNamespace7 {}

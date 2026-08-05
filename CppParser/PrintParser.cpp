@@ -17,39 +17,32 @@ namespace CE
 		m_Output << L"\n// " << Border << L"\n// " << FileName << L"\n// " << Border << L"\n\n";
 	}
 
-	bool PrintParser::OnParsed_Namespace(const Array<ParsedNamespace>& Namespaces)
+	bool PrintParser::OnParsed_Namespace(const ParsedNamespace& Namespace)
 	{
 		PrintFunctionText(L"OnParsed_Namespace");
 		PrintIndentText();
-		if (Namespaces.Size() > 0 && Namespaces[0].IsInline)
+		if (Namespace.Name.Segments.Size() > 0 && Namespace.Name.Segments[0].IsInline)
 		{
 			m_Output << L"inline ";
 		}
 		m_Output << L"namespace ";
-		for (const ParsedNamespace& Namespace : Namespaces)
+		String Attributes = FormatAttributes(Namespace.Attributes);
+		if (Attributes.Size() > 0)
 		{
-			String Attributes = FormatAttributes(Namespace.Attributes);
-			if (Attributes.Size() > 0)
-			{
-				m_Output << Attributes.Data() << L" ";
-			}
+			m_Output << Attributes.Data() << L" ";
 		}
-		bool IsFirst = true;
-		for (const ParsedNamespace& Namespace : Namespaces)
+		for (size_t Index = 0; Index < Namespace.Name.Segments.Size(); ++Index)
 		{
-			if (IsFirst)
-			{
-				IsFirst = false;
-			}
-			else
+			const ParsedNameSegment& Segment = Namespace.Name.Segments[Index];
+			if (Index > 0)
 			{
 				m_Output << L"::";
-				if (Namespace.IsInline)
+				if (Segment.IsInline)
 				{
 					m_Output << L"inline ";
 				}
 			}
-			m_Output << Namespace.Name.Data();
+			m_Output << Segment.Name.Data();
 		}
 		m_Output << L"\n";
 		PrintFunctionText(L"OnParsed_Namespace");
@@ -772,7 +765,7 @@ namespace CE
 			}
 
 			const ParsedNameSegment& Segment = Name.Segments[SegmentIndex];
-			if (Segment.bIsInline)
+			if (Segment.IsInline)
 			{
 				Result.Append(L"inline ");
 			}

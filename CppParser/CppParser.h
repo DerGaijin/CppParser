@@ -14,7 +14,7 @@ namespace CE
 		virtual void Parse();
 
 	protected:
-		virtual bool OnParsed_Namespace(const Array<ParsedNamespace>& Namespaces) { return true; }
+		virtual bool OnParsed_Namespace(const ParsedNamespace& Namespace) { return true; }
 		virtual bool OnParsed_NamespaceAlias(const ParsedNamespaceAlias& Alias) { return true; }
 		virtual bool OnParsed_ScopeEnd() { return true; }
 		virtual bool OnParsed_Class(const ParsedClass& Class) { return true; }
@@ -31,6 +31,14 @@ namespace CE
 		virtual bool OnParsed_Concept(const ParsedConcept& Concept) { return true; }
 		virtual bool OnParsed_StaticAssert(const ParsedStaticAssert& Assert) { return true; }
 		virtual bool OnParsed_Linkage(const ParsedLinkage& Linkage) { return true; }
+
+
+	private:
+		void RequireToken(TextToken& Token, ETextTokenType RequiredType = ETextTokenType::Undefined, const String& RequiredValue = TEXT(""));
+
+		void Parse_Name(TextToken& Token, ParsedName& Name, bool AllowTemplate, bool AllowInline, bool AllowLeadingScope);
+		void Parse_Namespace(TextToken& Token, bool IsInline);
+		void Parse_Access(TextToken& Token, EAccessSpecifier Access);
 
 	};
 }
