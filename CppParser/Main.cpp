@@ -7,22 +7,30 @@ using namespace CE;
 #include <iostream>
 #include <sstream>
 
+struct ParserContext
+{
+	std::atomic<size_t> FileCounter = 0;
+};
+
 class TempParser : public CppParser
 {
 public:
-	TempParser(const std::filesystem::path& Path, TextTokenizer& Tokenizer, std::wostream& Output) : CppParser(Path, Tokenizer) {}
+	TempParser(const std::filesystem::path& Path, TextTokenizer& Tokenizer, ParserContext& Context) : CppParser(Path, Tokenizer), m_Ctx(Context) {}
 protected:
 	void OnParseBegin() override
 	{
-		std::cout << "Parsing: " << CurrentFile() << std::endl;
+		size_t FileIdx = m_Ctx.FileCounter += 1;
+		std::cout << "[" << FileIdx << "] " << "Parsing: " << CurrentFile() << std::endl;
 	}
+private:
+	ParserContext& m_Ctx;
 };
 
 int main()
 {
 	//ParseManager<PrintParser> PM;
 	ParseManager<TempParser> PM;
-	PM.ParseSystemIncludes = true;
+	PM.ParseSystemIncludes = false;
 	PM.SetupEnvironment();
 #if 0
 	PM.AddFile("UnitTest.hpp");
@@ -50,7 +58,9 @@ int main()
 
 	try
 	{
-		PM.Run(ResultFile);
+		ParserContext Ctx;
+		//PM.Run(ResultFile);
+		PM.Run(Ctx);
 	}
 	catch (const CE::TextTokenizerError& Error)
 	{

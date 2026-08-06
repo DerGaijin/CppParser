@@ -886,31 +886,36 @@ namespace CE
 		{
 			bool IsRequired = Token.Value_Text == L"ifdef" || Token.Value_Text == L"elifdef";
 			bool IsElse = Token.Value_Text == L"elifdef" || Token.Value_Text == L"elifndef";
+			if (IsElse && m_BlockStack.Size() == 0)
+			{
+				throw TextTokenizerError(TEXT("Found elifdef/elifndef without if directive"), GetActiveTokenizer(), 0, CurrentFile());
+			}
 
-			if (!GetTokenPreprocessedComments(Token, PrevBlockEnabled) || Token.Type != ETextTokenType::Identifier || IsTokenOnNewLine(Token))
+			bool EvaluateCondition = IsElse
+				? PrevBlockEnabled && m_BlockStack[m_BlockStack.Size() - 1] == EBlockState::Disabled
+				: ParentBlockEnabled;
+			if (!GetTokenPreprocessedComments(Token, EvaluateCondition) || Token.Type != ETextTokenType::Identifier || IsTokenOnNewLine(Token))
 			{
 				throw TextTokenizerError(TEXT("Expected Identifier after ifdef/ifndef/elifdef/elifndef"), GetActiveTokenizer(), 0, CurrentFile());
 			}
 
 			std::wstring DefinitionName = Token.Value_Text;
-
-			bool Enable = Definitions.find(DefinitionName) != Definitions.end();
+			bool Enable = EvaluateCondition && Definitions.find(DefinitionName) != Definitions.end();
 			if (!IsRequired)
 			{
-				Enable = !Enable;
+				Enable = EvaluateCondition && !Enable;
 			}
 
 			if (IsElse)
 			{
 				EBlockState& Current = m_BlockStack[m_BlockStack.Size() - 1];
-				if (!PrevBlockEnabled || Current != EBlockState::Disabled)
-					Current = EBlockState::Completed;
-				else
-					Current = Enable ? EBlockState::Enabled : EBlockState::Disabled;
+				Current = EvaluateCondition
+					? (Enable ? EBlockState::Enabled : EBlockState::Disabled)
+					: EBlockState::Completed;
 			}
 			else
 			{
-				m_BlockStack.Emplace((ParentBlockEnabled && Enable) ? EBlockState::Enabled : EBlockState::Disabled);
+				m_BlockStack.Emplace(Enable ? EBlockState::Enabled : EBlockState::Disabled);
 			}
 		}
 		else if (Token.Value_Text == L"if" || Token.Value_Text == L"elif")
@@ -924,19 +929,29 @@ namespace CE
 				}
 			}
 
-			bool Enable = PreprocessCondition(Token, PrevBlockEnabled, TokenIsValid);
+			bool EvaluateCondition = IsElse
+				? PrevBlockEnabled && m_BlockStack[m_BlockStack.Size() - 1] == EBlockState::Disabled
+				: ParentBlockEnabled;
+			bool Enable = false;
+			if (EvaluateCondition)
+			{
+				Enable = PreprocessCondition(Token, true, TokenIsValid);
+			}
+			else
+			{
+				SkipDirectiveEnd(Token, false, TokenIsValid);
+			}
 
 			if (IsElse)
 			{
 				EBlockState& Current = m_BlockStack[m_BlockStack.Size() - 1];
-				if (!PrevBlockEnabled || Current != EBlockState::Disabled)
-					Current = EBlockState::Completed;
-				else
-					Current = Enable ? EBlockState::Enabled : EBlockState::Disabled;
+				Current = EvaluateCondition
+					? (Enable ? EBlockState::Enabled : EBlockState::Disabled)
+					: EBlockState::Completed;
 			}
 			else
 			{
-				m_BlockStack.Emplace((ParentBlockEnabled && Enable) ? EBlockState::Enabled : EBlockState::Disabled);
+				m_BlockStack.Emplace(Enable ? EBlockState::Enabled : EBlockState::Disabled);
 			}
 		}
 		else if (Token.Value_Text == L"else")
