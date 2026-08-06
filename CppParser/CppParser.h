@@ -36,9 +36,11 @@ namespace CE
 	private:
 		void RequireToken(TextToken& Token, ETextTokenType RequiredType = ETextTokenType::Undefined, const String& RequiredValue = TEXT(""));
 
-		void Parse_Name(TextToken& Token, ParsedName& Name, bool AllowTemplate, bool AllowInline, bool AllowLeadingScope);
+		void Parse_Name(TextToken& Token, ParsedName& Name, bool AllowTemplate, bool AllowInline, bool AllowLeadingScope, bool AllowScope);
+		void Parse_Type(TextToken& Token, ParsedType& Type);
 		void Parse_Namespace(TextToken& Token, bool IsInline);
+		void Parse_Class(TextToken& Token, EClassType Type);
+		void Parse_Enum(TextToken& Token);
 		void Parse_Access(TextToken& Token, EAccessSpecifier Access);
-
 	};
 }

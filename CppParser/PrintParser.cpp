@@ -241,7 +241,7 @@ namespace CE
 			m_Output << L" " << Attributes.Data();
 		}
 		m_Output << L" " << FormatName(Name).Data();
-		if (Enum.UnderlyingType.Name.Segments.Size() > 0)
+		if (Enum.UnderlyingType.Name.Segments.Size() > 0 || Enum.UnderlyingType.Flags != EParsedTypeFlags::None)
 		{
 			m_Output << L" : " << FormatType(Enum.UnderlyingType).Data();
 		}

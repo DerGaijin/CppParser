@@ -28,6 +28,21 @@ namespace CE
 					Parse_Namespace(Token, false);
 					continue;
 				}
+				else if (Token.Value_Text == TEXT("class"))
+				{
+					Parse_Class(Token, EClassType::Class);
+					continue;
+				}
+				else if (Token.Value_Text == TEXT("struct"))
+				{
+					Parse_Class(Token, EClassType::Struct);
+					continue;
+				}
+				else if (Token.Value_Text == TEXT("enum"))
+				{
+					Parse_Enum(Token);
+					continue;
+				}
 				else if (Token.Value_Text == TEXT("inline"))
 				{
 					RequireToken(Token);
@@ -59,6 +74,10 @@ namespace CE
 				if (Token.Value_Text == TEXT("}"))
 				{
 					OnParsed_ScopeEnd();
+					continue;
+				}
+				else if (Token.Value_Text == TEXT(";"))
+				{
 					continue;
 				}
 			}
@@ -100,7 +119,7 @@ namespace CE
 		}
 	}
 
-	void CppParser::Parse_Name(TextToken& Token, ParsedName& Name, bool AllowTemplate, bool AllowInline, bool AllowLeadingScope)
+	void CppParser::Parse_Name(TextToken& Token, ParsedName& Name, bool AllowTemplate, bool AllowInline, bool AllowLeadingScope, bool AllowScope)
 	{
 		Name.Segments.Clear();
 		if (AllowLeadingScope && Token.Type == ETextTokenType::Symbol && Token.Value_Text == TEXT(":"))
@@ -237,12 +256,57 @@ namespace CE
 				}
 			}
 
-			if (Token.Type != ETextTokenType::Symbol || Token.Value_Text != TEXT(":"))
+			if (!AllowScope || Token.Type != ETextTokenType::Symbol || Token.Value_Text != TEXT(":"))
 			{
 				return;
 			}
 
 			RequireToken(Token, ETextTokenType::Symbol, TEXT(":"));
+			RequireToken(Token);
+		}
+	}
+
+	void CppParser::Parse_Type(TextToken& Token, ParsedType& Type)
+	{
+		auto AddFlag = [&Type](EParsedTypeFlags Flag)
+			{
+				Type.Flags = static_cast<EParsedTypeFlags>(static_cast<uint8>(Type.Flags) | static_cast<uint8>(Flag));
+			};
+
+		while (Token.Type == ETextTokenType::Identifier)
+		{
+			if (Token.Value_Text == TEXT("const"))
+			{
+				AddFlag(EParsedTypeFlags::IsConst);
+			}
+			else if (Token.Value_Text == TEXT("volatile"))
+			{
+				AddFlag(EParsedTypeFlags::IsVolatile);
+			}
+			else if (Token.Value_Text == TEXT("unsigned"))
+			{
+				AddFlag(EParsedTypeFlags::IsUnsigned);
+			}
+			else if (Token.Value_Text == TEXT("signed"))
+			{
+				AddFlag(EParsedTypeFlags::IsSigned);
+			}
+			else
+			{
+				break;
+			}
+			RequireToken(Token);
+		}
+
+		if (Token.Type != ETextTokenType::Identifier && (Token.Type != ETextTokenType::Symbol || Token.Value_Text != TEXT(":")))
+		{
+			return;
+		}
+
+		Parse_Name(Token, Type.Name, true, false, true, true);
+		while (Token.Type == ETextTokenType::Identifier)
+		{
+			Type.Name.Segments[Type.Name.Segments.Size() - 1].Name += TEXT(" ") + Token.Value_Text;
 			RequireToken(Token);
 		}
 	}
@@ -253,14 +317,14 @@ namespace CE
 		if (Token.Type == ETextTokenType::Identifier)
 		{
 			ParsedNamespace Namespace;
-			Parse_Name(Token, Namespace.Name, false, true, false);
+			Parse_Name(Token, Namespace.Name, false, true, false, true);
 			Namespace.Name.Segments[0].IsInline = IsInline;
 			if (Token.Type == ETextTokenType::Symbol && Token.Value_Text == TEXT("="))
 			{
 				ParsedNamespaceAlias Alias;
 				Alias.Name = Namespace.Name;
 				RequireToken(Token);
-				Parse_Name(Token, Alias.Target, false, false, true);
+				Parse_Name(Token, Alias.Target, false, false, true, true);
 				if (Token.Type != ETextTokenType::Symbol || Token.Value_Text != TEXT(";"))
 				{
 					throw TextTokenizerError(TEXT("Expected semicolon after namespace alias"), Token, CurrentFile());
@@ -284,86 +348,178 @@ namespace CE
 		}
 	}
 
+	void CppParser::Parse_Class(TextToken& Token, EClassType Type)
+	{
+		ParsedClass Class;
+		Class.Type = Type;
+		RequireToken(Token);
+
+		while (Token.Type == ETextTokenType::Identifier && (Token.Value_Text == TEXT("__declspec") || Token.Value_Text == TEXT("alignas")))
+		{
+			ParsedAttribute& Attribute = Class.Attributes.EmplaceRef();
+			Attribute.Kind = Token.Value_Text == TEXT("alignas") ? ParsedAttribute::EKind::Alignas : ParsedAttribute::EKind::Declspec;
+			RequireToken(Token, ETextTokenType::Symbol, TEXT("("));
+			RequireToken(Token);
+			String Text;
+			size_t Depth = 1;
+			while (Depth > 0)
+			{
+				if (Token.Type == ETextTokenType::Symbol && Token.Value_Text == TEXT("("))
+				{
+					++Depth;
+				}
+				else if (Token.Type == ETextTokenType::Symbol && Token.Value_Text == TEXT(")") && --Depth == 0)
+				{
+					break;
+				}
+				Text += Token.RawText.Size() > 0 ? Token.RawText : Token.Value_Text;
+				RequireToken(Token);
+			}
+			Text.Trim();
+			if (Attribute.Kind == ParsedAttribute::EKind::Declspec)
+			{
+				Attribute.Name.Segments.EmplaceRef().Name = Text;
+			}
+			else
+			{
+				Attribute.Arguments.EmplaceRef().Text = Text;
+			}
+			RequireToken(Token);
+		}
+
+		if (Token.Type == ETextTokenType::Identifier)
+		{
+			Parse_Name(Token, Class.Name, true, false, false, false);
+		}
+		else
+		{
+			Class.IsAnonymous = true;
+		}
+
+		if (Token.Type == ETextTokenType::Identifier && Token.Value_Text == TEXT("final"))
+		{
+			Class.IsFinal = true;
+			RequireToken(Token);
+		}
+
+		if (Token.Type == ETextTokenType::Symbol && Token.Value_Text == TEXT(":"))
+		{
+			do
+			{
+				RequireToken(Token);
+				ParsedBaseClass& Base = Class.BaseClasses.EmplaceRef();
+				Base.AccessSpecifier = Type == EClassType::Struct ? EAccessSpecifier::Public : EAccessSpecifier::Private;
+				while (Token.Type == ETextTokenType::Identifier)
+				{
+					if (Token.Value_Text == TEXT("public"))
+					{
+						Base.AccessSpecifier = EAccessSpecifier::Public;
+					}
+					else if (Token.Value_Text == TEXT("protected"))
+					{
+						Base.AccessSpecifier = EAccessSpecifier::Protected;
+					}
+					else if (Token.Value_Text == TEXT("private"))
+					{
+						Base.AccessSpecifier = EAccessSpecifier::Private;
+					}
+					else if (Token.Value_Text == TEXT("virtual"))
+					{
+						Base.IsVirtual = true;
+					}
+					else
+					{
+						break;
+					}
+					RequireToken(Token);
+				}
+
+				Parse_Type(Token, Base.Type);
+			} while (Token.Type == ETextTokenType::Symbol && Token.Value_Text == TEXT(","));
+		}
+
+		if (Token.Type != ETextTokenType::Symbol || (Token.Value_Text != TEXT("{") && Token.Value_Text != TEXT(";")))
+		{
+			throw TextTokenizerError(TEXT("Expected class body or semicolon"), Token, CurrentFile());
+		}
+
+		Class.HasBody = Token.Value_Text == TEXT("{");
+		Class.IsForward = !Class.HasBody;
+		OnParsed_Class(Class);
+	}
+
+	void CppParser::Parse_Enum(TextToken& Token)
+	{
+		ParsedEnum Enum;
+		RequireToken(Token);
+		if (Token.Type == ETextTokenType::Identifier && (Token.Value_Text == TEXT("class") || Token.Value_Text == TEXT("struct")))
+		{
+			Enum.IsScoped = true;
+			Enum.IsStruct = Token.Value_Text == TEXT("struct");
+			RequireToken(Token);
+		}
+		if (Token.Type == ETextTokenType::Identifier)
+		{
+			Parse_Name(Token, Enum.Name, false, false, false, false);
+		}
+		else
+		{
+			Enum.IsAnonymous = true;
+		}
+
+		if (Token.Type == ETextTokenType::Symbol && Token.Value_Text == TEXT(":"))
+		{
+			RequireToken(Token);
+			Parse_Type(Token, Enum.UnderlyingType);
+		}
+
+		if (Token.Type != ETextTokenType::Symbol || (Token.Value_Text != TEXT("{") && Token.Value_Text != TEXT(";")))
+		{
+			throw TextTokenizerError(TEXT("Expected enum body or semicolon"), Token, CurrentFile());
+		}
+		Enum.IsForward = Token.Value_Text == TEXT(";");
+		OnParsed_Enum(Enum);
+		if (Enum.IsForward) return;
+
+		RequireToken(Token);
+		while (Token.Type != ETextTokenType::Symbol || Token.Value_Text != TEXT("}"))
+		{
+			ParsedEnumValue Value;
+			if (Token.Type != ETextTokenType::Identifier)
+			{
+				throw TextTokenizerError(TEXT("Expected enum value"), Token, CurrentFile());
+			}
+			Value.Name = Token.Value_Text;
+			RequireToken(Token);
+
+			if (Token.Type == ETextTokenType::Symbol && Token.Value_Text == TEXT("="))
+			{
+				Value.HasValue = true;
+				size_t Depth = 0;
+				RequireToken(Token);
+				while (Depth > 0 || Token.Type != ETextTokenType::Symbol || (Token.Value_Text != TEXT(",") && Token.Value_Text != TEXT("}")))
+				{
+					if (Value.Value.Text.Size() > 0 && Token.Whitespaces.Size() > 0) Value.Value.Text += TEXT(" ");
+					Value.Value.Text += Token.RawText.Size() > 0 ? Token.RawText : Token.Value_Text;
+					if (Token.Type == ETextTokenType::Symbol && (Token.Value_Text == TEXT("(") || Token.Value_Text == TEXT("[") || Token.Value_Text == TEXT("{"))) ++Depth;
+					else if (Token.Type == ETextTokenType::Symbol && (Token.Value_Text == TEXT(")") || Token.Value_Text == TEXT("]") || Token.Value_Text == TEXT("}"))) --Depth;
+					RequireToken(Token);
+				}
+				Value.Value.Text.Trim();
+			}
+			if (Token.Type != ETextTokenType::Symbol || (Token.Value_Text != TEXT(",") && Token.Value_Text != TEXT("}")))
+			{
+				throw TextTokenizerError(TEXT("Expected comma or enum end"), Token, CurrentFile());
+			}
+			OnParsed_EnumValue(Value);
+			if (Token.Value_Text == TEXT(",")) RequireToken(Token);
+		}
+		OnParsed_ScopeEnd();
+	}
+
 	void CppParser::Parse_Access(TextToken& Token, EAccessSpecifier Access)
 	{
 		RequireToken(Token, ETextTokenType::Symbol, TEXT(":"));
 		OnParsed_Access(Access);
 	}
 }
-
-/* Keywords - Type
-unsigned
-signed
-const
-volatile
-========
-decltype
-typename
-========
-class
-struct
-union
-enum
-*/
-
-/* Keywords - Variable
-static
-thread_local
-mutable
-constexpr
-extern
-*/
-
-/* Keywords - Function
-inline
-friend
-final
-virtual
-static
-consteval
-explicit
-noexcept
-default
-delete
-extern
-*/
-
-/* Keywords
-namespace
-inline
-class
-public
-protected
-private
-__declspec
-friend
-struct
-final
-alignas
-virtual
-enum
-unsigned
-signed
-const
-volatile
-static
-thread_local
-mutable
-typename
-constexpr
-consteval
-decltype
-explicit
-noexcept
-default
-delete
-typedef
-using
-union
-extern
-template
-operator
-concept
-requires
-static_assert
-*/
