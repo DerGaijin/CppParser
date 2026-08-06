@@ -36,13 +36,14 @@ namespace CE
 		bool HasFlag(EParsedVariableFlags Flags, EParsedVariableFlags Flag) const;
 		bool HasFlag(EParsedFunctionFlags Flags, EParsedFunctionFlags Flag) const;
 		bool HasFlag(EParsedTypeFlags Flags, EParsedTypeFlags Flag) const;
-		bool PrintParsedFunction(const String& CallbackName, const ParsedFunctionBase& Function, const ParsedType* ReturnType = nullptr, const String* OperatorSymbol = nullptr, bool IsTrailingReturnType = false);
+		bool PrintParsedFunction(const String& CallbackName, const ParsedFunctionBase& Function, const ParsedType* ReturnType = nullptr, const String* OperatorSymbol = nullptr, bool IsTrailingReturnType = false, bool IsDestructor = false);
 		void PrintFunctionText(const String& Name);
 		void PrintIndentText(int32 Shift = 0);
 		String MakeUnnamedTypeName();
 		String FormatAttributes(const Array<ParsedAttribute>& Attributes) const;
 		String FormatName(const ParsedName& Name) const;
 		String FormatType(const ParsedType& Type, bool IncludeArrayExtents = true) const;
+		String FormatType(const ParsedType& Type, const String& DeclaratorName, bool IncludeArrayExtents = true) const;
 		void PrintArrayExtents(const ParsedType& Type);
 
 

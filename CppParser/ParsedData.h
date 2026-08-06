@@ -59,6 +59,7 @@ namespace CE
 		EKind Kind = EKind::Standard;
 		ParsedName Name;
 		Array<ParsedExpression> Arguments;
+		String Text;
 	};
 
 	struct ParsedIndirection
@@ -95,7 +96,9 @@ namespace CE
 		Array<ParsedIndirection> Indirections;
 		Array<ParsedExpression> ArrayExtents;
 		ParsedExpression Decltype;
+		String Declarator;
 		EParsedTypeFlags Flags = EParsedTypeFlags::None;
+		bool IsTypename = false;
 	};
 
 	struct ParsedTemplateArgument
@@ -164,7 +167,7 @@ namespace CE
 		bool HasValue = false;
 	};
 
-	enum class EParsedVariableFlags : uint8
+	enum class EParsedVariableFlags : uint16
 	{
 		None = 0,
 		HasInitializer = 1 << 0,
@@ -175,6 +178,7 @@ namespace CE
 		IsMutable = 1 << 5,
 		IsExtern = 1 << 6,
 		IsBitfield = 1 << 7,
+		IsInline = 1 << 8,
 	};
 
 	struct ParsedVariable
@@ -194,6 +198,7 @@ namespace CE
 		Array<ParsedAttribute> Attributes;
 		bool HasDefaultValue = false;
 		bool IsVariadic = false;
+		bool IsTypePack = false;
 	};
 
 	enum class EParsedFunctionFlags : uint16
@@ -223,7 +228,12 @@ namespace CE
 		ParsedExpression RequiresClause;
 		ParsedExpression Body;
 		ParsedExpression NoexceptExpression;
+		ParsedExpression Initializer;
+		ParsedExpression ExplicitExpression;
 		EParsedFunctionFlags Flags = EParsedFunctionFlags::None;
+		bool HasInitializer = false;
+		bool HasExplicitExpression = false;
+		bool IsTryBlock = false;
 	};
 
 	struct ParsedFunction : public ParsedFunctionBase
@@ -273,6 +283,7 @@ namespace CE
 		ParsedType DefaultType;
 		ParsedExpression DefaultExpression;
 		ParsedExpression RequiresClause;
+		String TemplatePrefix;
 		bool HasDefault = false;
 		bool IsVariadic = false;
 	};

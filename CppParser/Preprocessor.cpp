@@ -167,6 +167,64 @@ namespace CE
 		Tokenizer.Config.SymbolPairs.AddUnique({ '|', '|' });
 	}
 
+	std::filesystem::path Preprocessor::NormalizeFileIdentity(const std::filesystem::path& Path)
+	{
+		if (Path.empty())
+		{
+			return {};
+		}
+
+		std::error_code Error;
+		std::filesystem::path AbsolutePath = std::filesystem::absolute(Path, Error);
+		if (Error)
+		{
+			Error.clear();
+			AbsolutePath = Path;
+		}
+
+		std::filesystem::path CanonicalPath = std::filesystem::weakly_canonical(AbsolutePath, Error);
+		if (!Error)
+		{
+			return CanonicalPath.lexically_normal();
+		}
+
+		return AbsolutePath.lexically_normal();
+	}
+
+	bool Preprocessor::HasPragmaOnce(const std::filesystem::path& Path) const
+	{
+		const std::filesystem::path Identity = NormalizeFileIdentity(Path);
+		if (Identity.empty())
+		{
+			return false;
+		}
+
+		for (const auto& PragmaOnceFile : m_PragmaOnceFiles)
+		{
+			if (PragmaOnceFile == Identity)
+			{
+				return true;
+			}
+
+			std::error_code Error;
+			if (std::filesystem::equivalent(PragmaOnceFile, Identity, Error) && !Error)
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	void Preprocessor::RegisterPragmaOnce(const std::filesystem::path& Path)
+	{
+		const std::filesystem::path Identity = NormalizeFileIdentity(Path);
+		if (!Identity.empty() && !HasPragmaOnce(Identity))
+		{
+			m_PragmaOnceFiles.Emplace(Identity);
+		}
+	}
+
 	bool Preprocessor::GetToken(TextToken& Token)
 	{
 		try
@@ -515,8 +573,7 @@ namespace CE
 
 		if (Token.Type == ETextTokenType::Identifier && Token.Value_Text == L"once")
 		{
-			//@TODO: Handle Pragma once directives
-			//m_Context->AlreadyIncluded.emplace(FilePath());
+			RegisterPragmaOnce(CurrentFile());
 		}
 
 		SkipDirectiveEnd(Token, IsBlockEnabled(), TokenIsValid);
@@ -623,6 +680,12 @@ namespace CE
 		if (!OnParsed_Include(CurrentFile(), Include, IsSystemInclude, FinalIncludePath, *IncludeContent))
 		{
 			throw TextTokenizerError(TEXT("OnParsed_Include returned false"), GetActiveTokenizer(), 0, CurrentFile());
+		}
+
+		if (HasPragmaOnce(FinalIncludePath))
+		{
+			SkipDirectiveEnd(Token, false, TokenIsValid);
+			return true;
 		}
 
 		if (IncludeContent->Size() > 0)

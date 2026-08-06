@@ -178,7 +178,7 @@ namespace CE
 				{
 					m_Output << L"virtual ";
 				}
-				m_Output << FormatName(BaseClass.Type.Name).Data();
+				m_Output << FormatType(BaseClass.Type).Data();
 			}
 		}
 
@@ -296,6 +296,10 @@ namespace CE
 		{
 			m_Output << L"static ";
 		}
+		if (HasFlag(Value.Flags, EParsedVariableFlags::IsInline))
+		{
+			m_Output << L"inline ";
+		}
 		if (HasFlag(Value.Flags, EParsedVariableFlags::IsThreadLocal))
 		{
 			m_Output << L"thread_local ";
@@ -322,12 +326,20 @@ namespace CE
 		{
 			Type.Name = m_LastClosedScope.Name;
 		}
-		String TypeText = FormatType(Type, false);
+		String VariableName = FormatName(Value.Name);
+		String TypeText = Type.Declarator.Size() > 0 ? FormatType(Type, VariableName, false) : FormatType(Type, false);
 		if (TypeText.Size() > 0)
 		{
-			m_Output << TypeText.Data() << L" ";
+			m_Output << TypeText.Data();
+			if (Type.Declarator.Size() == 0)
+			{
+				m_Output << L" ";
+			}
 		}
-		m_Output << FormatName(Value.Name).Data();
+		if (Type.Declarator.Size() == 0)
+		{
+			m_Output << VariableName.Data();
+		}
 		PrintArrayExtents(Value.Type);
 		if (HasFlag(Value.Flags, EParsedVariableFlags::HasInitializer))
 		{
@@ -344,7 +356,7 @@ namespace CE
 
 	bool PrintParser::OnParsed_Destructor(const ParsedDestructor& Destructor)
 	{
-		return PrintParsedFunction(L"OnParsed_Destructor", Destructor);
+		return PrintParsedFunction(L"OnParsed_Destructor", Destructor, nullptr, nullptr, false, true);
 	}
 
 	bool PrintParser::OnParsed_Function(const ParsedFunction& Function)
@@ -358,7 +370,7 @@ namespace CE
 		return PrintParsedFunction(L"OnParsed_Operator", Operator, HasReturnType ? &Operator.ReturnType : nullptr, &Operator.Symbol, Operator.IsTrailingType);
 	}
 
-	bool PrintParser::PrintParsedFunction(const String& CallbackName, const ParsedFunctionBase& Function, const ParsedType* ReturnType, const String* OperatorSymbol, bool IsTrailingReturnType)
+	bool PrintParser::PrintParsedFunction(const String& CallbackName, const ParsedFunctionBase& Function, const ParsedType* ReturnType, const String* OperatorSymbol, bool IsTrailingReturnType, bool IsDestructor)
 	{
 		PrintFunctionText(CallbackName);
 		PrintIndentText();
@@ -382,7 +394,12 @@ namespace CE
 		}
 		if (HasFlag(Function.Flags, EParsedFunctionFlags::IsExplicit))
 		{
-			m_Output << L"explicit ";
+			m_Output << L"explicit";
+			if (Function.HasExplicitExpression)
+			{
+				m_Output << L"(" << Function.ExplicitExpression.Text.Data() << L")";
+			}
+			m_Output << L" ";
 		}
 		if (HasFlag(Function.Flags, EParsedFunctionFlags::IsConstexpr))
 		{
@@ -408,6 +425,10 @@ namespace CE
 		}
 		else
 		{
+			if (IsDestructor)
+			{
+				m_Output << L"~";
+			}
 			m_Output << FormatName(Function.Name).Data();
 		}
 
@@ -431,8 +452,20 @@ namespace CE
 			}
 			else
 			{
-				m_Output << FormatType(Parameter.Type, false).Data();
-				if (Parameter.Name.Segments.Size() > 0)
+				String ParameterName = FormatName(Parameter.Name);
+				if (Parameter.Type.Declarator.Size() > 0)
+				{
+					m_Output << FormatType(Parameter.Type, ParameterName, false).Data();
+				}
+				else
+				{
+					m_Output << FormatType(Parameter.Type, false).Data();
+					if (Parameter.IsTypePack)
+					{
+						m_Output << L"...";
+					}
+				}
+				if (Parameter.Name.Segments.Size() > 0 && Parameter.Type.Declarator.Size() == 0)
 				{
 					m_Output << L" " << FormatName(Parameter.Name).Data();
 				}
@@ -484,6 +517,14 @@ namespace CE
 
 		if (HasFlag(Function.Flags, EParsedFunctionFlags::HasBody))
 		{
+			if (Function.IsTryBlock)
+			{
+				m_Output << L" try";
+			}
+			if (Function.HasInitializer)
+			{
+				m_Output << L" : " << Function.Initializer.Text.Data();
+			}
 			m_Output << L" " << Function.Body.Text.Data();
 		}
 		else
@@ -506,7 +547,15 @@ namespace CE
 			{
 				m_Output << Attributes.Data() << L" ";
 			}
-			m_Output << L"typedef " << FormatType(Using.Type).Data() << L" " << FormatName(Using.Name).Data();
+			m_Output << L"typedef ";
+			if (Using.Type.Declarator.Size() > 0)
+			{
+				m_Output << FormatType(Using.Type, FormatName(Using.Name)).Data();
+			}
+			else
+			{
+				m_Output << FormatType(Using.Type).Data() << L" " << FormatName(Using.Name).Data();
+			}
 			break;
 		case ParsedUsing::EKind::AliasDeclaration:
 			m_Output << L"using " << FormatName(Using.Name).Data();
@@ -564,8 +613,10 @@ namespace CE
 				}
 				break;
 			case ParsedTemplateParameter::EKind::NonType:
-			case ParsedTemplateParameter::EKind::TemplateTemplate:
 				m_Output << FormatType(Parameter.Type).Data() << L" ";
+				break;
+			case ParsedTemplateParameter::EKind::TemplateTemplate:
+				m_Output << Parameter.TemplatePrefix.Data() << L" ";
 				break;
 			}
 
@@ -640,7 +691,7 @@ namespace CE
 
 	bool PrintParser::HasFlag(EParsedVariableFlags Flags, EParsedVariableFlags Flag) const
 	{
-		return (static_cast<uint8>(Flags) & static_cast<uint8>(Flag)) != 0;
+		return (static_cast<uint16>(Flags) & static_cast<uint16>(Flag)) != 0;
 	}
 
 	bool PrintParser::HasFlag(EParsedFunctionFlags Flags, EParsedFunctionFlags Flag) const
@@ -698,6 +749,12 @@ namespace CE
 			{
 			case ParsedAttribute::EKind::Standard:
 				Result.Append(L"[[");
+				if (Attribute.Text.Size() > 0)
+				{
+					Result.Append(Attribute.Text);
+					Result.Append(L"]]");
+					continue;
+				}
 				break;
 			case ParsedAttribute::EKind::Declspec:
 				Result.Append(L"__declspec(");
@@ -799,6 +856,11 @@ namespace CE
 
 	String PrintParser::FormatType(const ParsedType& Type, bool IncludeArrayExtents) const
 	{
+		return FormatType(Type, {}, IncludeArrayExtents);
+	}
+
+	String PrintParser::FormatType(const ParsedType& Type, const String& DeclaratorName, bool IncludeArrayExtents) const
+	{
 		String Result;
 		const auto AppendSpecifier = [&Result](const WChar* Specifier)
 			{
@@ -809,6 +871,10 @@ namespace CE
 				Result.Append(Specifier);
 			};
 
+		if (Type.IsTypename)
+		{
+			AppendSpecifier(L"typename");
+		}
 		if (HasFlag(Type.Flags, EParsedTypeFlags::IsConst))
 		{
 			AppendSpecifier(L"const");
@@ -890,6 +956,16 @@ namespace CE
 			if (Indirection.IsMutable)
 			{
 				Result.Append(L" mutable");
+			}
+		}
+		if (Type.Declarator.Size() > 0)
+		{
+			String Declarator = Type.Declarator;
+			Declarator.Replace(TEXT("$"), DeclaratorName, Declarator.Size());
+			if (Declarator.Size() > 0)
+			{
+				Result.Append(L" ");
+				Result.Append(Declarator);
 			}
 		}
 

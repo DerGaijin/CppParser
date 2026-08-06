@@ -114,6 +114,12 @@ namespace CE
 
 
 	private:
+		static std::filesystem::path NormalizeFileIdentity(const std::filesystem::path& Path);
+
+		bool HasPragmaOnce(const std::filesystem::path& Path) const;
+
+		void RegisterPragmaOnce(const std::filesystem::path& Path);
+
 		TextTokenizer& GetActiveTokenizer();
 
 		void PushSubTokenizer(const std::filesystem::path& Path, const String& DefinitionName, SharedPtr<String> Text, const Array<WChar>& Whitespace);
@@ -167,5 +173,6 @@ namespace CE
 
 		Array<SubTokenizer> m_SubTokenizers;
 		Array<EBlockState> m_BlockStack;
+		Array<std::filesystem::path> m_PragmaOnceFiles;
 	};
 }
