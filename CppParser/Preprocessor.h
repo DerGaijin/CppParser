@@ -69,6 +69,10 @@ namespace CE
 			SharedPtr<TextTokenizerInput_String> TokenizerInput;
 			SharedPtr<TextTokenizer> Tokenizer;
 			Array<WChar> Whitespaces;
+			size_t OriginPos = 0;
+			size_t OriginLine = 0;
+			size_t OriginLinePos = 0;
+			bool HasOrigin = false;
 		};
 
 		enum class EBlockState
@@ -122,7 +126,8 @@ namespace CE
 
 		TextTokenizer& GetActiveTokenizer();
 
-		void PushSubTokenizer(const std::filesystem::path& Path, const String& DefinitionName, SharedPtr<String> Text, const Array<WChar>& Whitespace);
+		void PushSubTokenizer(const std::filesystem::path& Path, const String& DefinitionName, SharedPtr<String> Text,
+			const Array<WChar>& Whitespace, const TextToken* Origin = nullptr);
 
 		void PopSubTokenizer();
 

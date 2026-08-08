@@ -32,7 +32,6 @@ namespace CE
 		virtual bool OnParsed_StaticAssert(const ParsedStaticAssert& Assert) { return true; }
 		virtual bool OnParsed_Linkage(const ParsedLinkage& Linkage) { return true; }
 
-
 	private:
 		enum class EScopeType : uint8
 		{
@@ -55,52 +54,36 @@ namespace CE
 		static void AddFlag(EParsedFunctionFlags& Flags, EParsedFunctionFlags Flag);
 		static bool IsTypeQualifier(const String& Value);
 		static bool IsDeclarationSpecifier(const String& Value);
-		static bool IsFunctionTailSpecifier(const String& Value);
 		static bool IsBuiltinType(const String& Value);
+		static void AppendTokenText(String& Text, const TextToken& Token);
+		static void AddNameSegment(ParsedName& Name, const String& Value);
 
-		bool HasToken(size_t Offset = 0) const;
-		const TextToken& PeekToken(size_t Offset = 0) const;
-		TextToken TakeToken();
-		bool IsToken(const String& Value, size_t Offset = 0) const;
-		bool ConsumeToken(const String& Value);
-		void ExpectToken(const String& Value);
-		void ThrowError(const String& Message) const;
-		bool IsClassDeclaration() const;
-		size_t FindDeclaratorName(size_t Begin, size_t End) const;
-		size_t FindDeclaratorTypeEnd(size_t Begin, size_t NameAt) const;
-		String BuildDeclarator(size_t Begin, size_t End, size_t NameAt) const;
+		void Advance(TextToken& Token, bool& HasToken);
+		bool ConsumeEllipsis(TextToken& Token, bool& HasToken);
+		void Expect(const String& Value, TextToken& Token, bool& HasToken);
+		void ThrowError(const String& Message, const TextToken& Token, bool HasToken) const;
+		void SkipBalanced(const String& Open, const String& Close, TextToken& Token, bool& HasToken, String* Text = nullptr);
+		void ReadExpressionUntil(String& Text, const String& EndA, const String& EndB, TextToken& Token, bool& HasToken);
 
-		String TokensToText(size_t Begin, size_t End) const;
-		size_t FindMatching(size_t Open, const String& OpenValue, const String& CloseValue) const;
-		size_t FindTopLevel(size_t Begin, size_t End, const String& Value) const;
-		Array<std::pair<size_t, size_t>> SplitTopLevel(size_t Begin, size_t End, const String& Value) const;
-
-		void Parse_Declaration();
-		void Parse_Name(size_t Begin, size_t End, ParsedName& Name, bool AllowInline = false);
-		void Parse_Type(size_t Begin, size_t End, ParsedType& Type);
-		void Parse_Attributes(Array<ParsedAttribute>& Attributes);
-		void Parse_Attributes(size_t& At, size_t End, Array<ParsedAttribute>& Attributes);
-		void Parse_Namespace(bool IsInline);
-		void Parse_Class(EClassType Type, bool IsFriend = false);
-		void Parse_Enum();
-		void Parse_Access(EAccessSpecifier Access);
-		void Parse_Using(bool IsTypedef);
-		void Parse_Template();
-		void Parse_Concept();
-		void Parse_StaticAssert();
-		void Parse_Linkage();
-		void Parse_General();
-		void Parse_ClosedClassDeclarators(const Scope& ClosedScope);
-		void Parse_Parameters(size_t Begin, size_t End, Array<ParsedFunctionParameter>& Parameters);
-		void Parse_FunctionTail(size_t Begin, size_t End, ParsedFunctionBase& Function, ParsedType* TrailingType, bool& IsTrailingType);
-		void Parse_Variable(size_t Begin, size_t End, size_t NameAt, const ParsedType& BaseType, EParsedVariableFlags Flags);
+		void ParseDeclaration(TextToken& Token, bool& HasToken);
+		void ParseAttributes(Array<ParsedAttribute>& Attributes, TextToken& Token, bool& HasToken);
+		void ParseNamespace(bool IsInline, TextToken& Token, bool& HasToken);
+		void ParseClass(EClassType Type, bool IsFriend, TextToken& Token, bool& HasToken);
+		void ParseEnum(TextToken& Token, bool& HasToken);
+		void ParseUsing(bool IsTypedef, TextToken& Token, bool& HasToken);
+		void ParseTemplate(TextToken& Token, bool& HasToken);
+		void ParseConcept(TextToken& Token, bool& HasToken);
+		void ParseStaticAssert(TextToken& Token, bool& HasToken);
+		void ParseLinkage(TextToken& Token, bool& HasToken);
+		void ParseGeneral(TextToken& Token, bool& HasToken, ParsedType Type = {}, EParsedVariableFlags VariableFlags = EParsedVariableFlags::None);
+		void ParseParameters(Array<ParsedFunctionParameter>& Parameters, TextToken& Token, bool& HasToken);
+		void ParseFunction(ParsedType ReturnType, const String& Name, bool IsDestructor, bool IsOperator, const String& OperatorSymbol,
+			EParsedFunctionFlags Flags, Array<ParsedAttribute>& Attributes, const String& ExplicitExpression, TextToken& Token, bool& HasToken);
+		void ParseClosedClassDeclarators(const Scope& ClosedScope, TextToken& Token, bool& HasToken);
 
 		String CurrentClassName() const;
 
-
 	private:
-		Array<TextToken> m_Tokens;
-		size_t m_TokenAt = 0;
 		Array<Scope> m_Scopes;
 		Array<ParsedAttribute> m_PendingAttributes;
 		ParsedType m_PendingDeclaredType;

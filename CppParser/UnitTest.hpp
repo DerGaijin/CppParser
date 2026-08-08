@@ -1,7 +1,11 @@
 #pragma once
 
+#define TEST_ALL
 #define TEST_NAMESPACES
-#define TEST_NAMESPACE_ALIAS
+#define TEST_CLASS_STRUCTS
+#define TEST_VARIABLES
+#define TEST_FUNCTIONS
+#define TEST_TEMPLATE
 
 #if defined(TEST_INCLUDES) || defined(TEST_ALL)
 #include <string>
@@ -161,6 +165,7 @@ auto (*trailing_return_function_pointer)(double) -> int (*)[3] = nullptr;
 #if defined(TEST_TYPE_ALIAS) || defined(TEST_ALL)
 using namespace TestNamespace3::TestNamespace4;
 using std::string;
+using ::TestNamespace1;
 using TestClass04 = std::string;
 using using_function_pointer = int (*)(int);
 using using_array_reference = int(&)[3];
@@ -191,6 +196,10 @@ struct UnionTest3 {
 #if defined(TEST_LINKAGE) || defined(TEST_ALL)
 extern "C" int c_linkage_function(int);
 extern "C++" int cpp_linkage_function(int);
+extern "C"
+{
+	int c_linkage_block_function(int);
+}
 #endif
 
 

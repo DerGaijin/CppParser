@@ -32,12 +32,6 @@ namespace CE
 			Value == TEXT("friend") || Value == TEXT("register");
 	}
 
-	bool CppParser::IsFunctionTailSpecifier(const String& Value)
-	{
-		return Value == TEXT("noexcept") || Value == TEXT("requires") || Value == TEXT("override") ||
-			Value == TEXT("final") || Value == TEXT("try") || Value == TEXT("catch");
-	}
-
 	bool CppParser::IsBuiltinType(const String& Value)
 	{
 		return Value == TEXT("void") || Value == TEXT("bool") || Value == TEXT("char") ||
@@ -48,6 +42,22 @@ namespace CE
 			Value == TEXT("__int32") || Value == TEXT("__int64");
 	}
 
+	void CppParser::AppendTokenText(String& Text, const TextToken& Token)
+	{
+		if (Text.Size() > 0 && Token.Whitespaces.Size() > 0)
+		{
+			Text += TEXT(" ");
+		}
+		Text += Token.RawText.Size() > 0 ? Token.RawText : Token.Value_Text;
+	}
+
+	void CppParser::AddNameSegment(ParsedName& Name, const String& Value)
+	{
+		if (Value.Size() > 0)
+		{
+			Name.Segments.EmplaceRef().Name = Value;
+		}
+	}
 
 	CppParser::CppParser(const std::filesystem::path& Path, TextTokenizer& Tokenizer) : Preprocessor(Path, Tokenizer)
 	{
@@ -57,1834 +67,1451 @@ namespace CE
 		Tokenizer.Config.SymbolPairs.AddUnique({ '-', '>' });
 	}
 
+	void CppParser::Advance(TextToken& Token, bool& HasToken)
+	{
+		HasToken = GetToken(Token);
+	}
+
+	bool CppParser::ConsumeEllipsis(TextToken& Token, bool& HasToken)
+	{
+		if (!HasToken) return false;
+		if (Token.Value_Text == TEXT("..."))
+		{
+			Advance(Token, HasToken);
+			return true;
+		}
+		if (Token.Value_Text != TEXT(".")) return false;
+		Advance(Token, HasToken);
+		if (!HasToken || Token.Value_Text != TEXT(".")) return false;
+		Advance(Token, HasToken);
+		if (!HasToken || Token.Value_Text != TEXT(".")) return false;
+		Advance(Token, HasToken);
+		return true;
+	}
+
+	void CppParser::Expect(const String& Value, TextToken& Token, bool& HasToken)
+	{
+		if (!HasToken || Token.Value_Text != Value)
+		{
+			ThrowError(TEXT("Expected '") + Value + TEXT("'"), Token, HasToken);
+		}
+		Advance(Token, HasToken);
+	}
+
+	void CppParser::ThrowError(const String& Message, const TextToken& Token, bool HasToken) const
+	{
+		if (HasToken)
+		{
+			throw TextTokenizerError(Message, Token, CurrentFile());
+		}
+		throw TextTokenizerError(Message, CurrentTokenizer(), 0, CurrentFile());
+	}
+
+	void CppParser::SkipBalanced(const String& Open, const String& Close, TextToken& Token, bool& HasToken, String* Text)
+	{
+		if (!HasToken || Token.Value_Text != Open)
+		{
+			ThrowError(TEXT("Expected '") + Open + TEXT("'"), Token, HasToken);
+		}
+		int32 Depth = 0;
+		do
+		{
+			if (Token.Value_Text == Open) ++Depth;
+			else if (Token.Value_Text == Close) --Depth;
+			else if (Close == TEXT(">") && Token.Value_Text == TEXT(">>")) Depth -= 2;
+			if (Text != nullptr) AppendTokenText(*Text, Token);
+			Advance(Token, HasToken);
+		} while (HasToken && Depth > 0);
+		if (Depth != 0)
+		{
+			ThrowError(TEXT("Unterminated balanced token sequence"), Token, HasToken);
+		}
+	}
+
+	void CppParser::ReadExpressionUntil(String& Text, const String& EndA, const String& EndB, TextToken& Token, bool& HasToken)
+	{
+		int32 Parens = 0;
+		int32 Brackets = 0;
+		int32 Braces = 0;
+		while (HasToken)
+		{
+			const String Value = Token.Value_Text;
+			if (Parens == 0 && Brackets == 0 && Braces == 0 && (Value == EndA || (EndB.Size() > 0 && Value == EndB)))
+			{
+				break;
+			}
+			if (Value == TEXT("(")) ++Parens;
+			else if (Value == TEXT(")") && Parens > 0) --Parens;
+			else if (Value == TEXT("[") || Value == TEXT("[[")) ++Brackets;
+			else if ((Value == TEXT("]") || Value == TEXT("]]")) && Brackets > 0) --Brackets;
+			else if (Value == TEXT("{")) ++Braces;
+			else if (Value == TEXT("}") && Braces > 0) --Braces;
+			AppendTokenText(Text, Token);
+			Advance(Token, HasToken);
+		}
+		Text.Trim();
+	}
+
 	void CppParser::Parse()
 	{
 		OnParseBegin();
-		m_Tokens.Clear();
-		m_TokenAt = 0;
 		m_Scopes.Clear();
 		m_PendingAttributes.Clear();
 		m_PendingDeclaredType = {};
 		m_PendingVariableFlags = EParsedVariableFlags::None;
 
 		TextToken Token;
-		while (GetToken(Token))
+		bool HasToken = GetToken(Token);
+		while (HasToken)
 		{
-			m_Tokens.Add(std::move(Token));
-		}
-
-		while (HasToken())
-		{
-			if (ConsumeToken(TEXT(";")))
+			if (Token.Value_Text == TEXT(";"))
 			{
+				Advance(Token, HasToken);
 				continue;
 			}
-			if (ConsumeToken(TEXT("}")))
+			if (Token.Value_Text == TEXT("}"))
 			{
 				if (m_Scopes.Size() == 0)
 				{
-					ThrowError(TEXT("Unexpected scope end"));
+					ThrowError(TEXT("Unexpected scope end"), Token, HasToken);
 				}
 				Scope ClosedScope = std::move(m_Scopes[m_Scopes.Size() - 1]);
 				m_Scopes.RemoveAt(m_Scopes.Size() - 1);
+				Advance(Token, HasToken);
 				OnParsed_ScopeEnd();
-				if (ClosedScope.Type == EScopeType::Class && !IsToken(TEXT(";")) && !IsToken(TEXT("}")))
+				if (ClosedScope.Type == EScopeType::Class && HasToken && Token.Value_Text != TEXT(";") && Token.Value_Text != TEXT("}"))
 				{
-					Parse_ClosedClassDeclarators(ClosedScope);
+					ParseClosedClassDeclarators(ClosedScope, Token, HasToken);
 				}
 				continue;
 			}
-			Parse_Declaration();
+			ParseDeclaration(Token, HasToken);
 		}
 
 		if (m_Scopes.Size() != 0)
 		{
-			ThrowError(TEXT("Expected scope end"));
+			ThrowError(TEXT("Expected scope end"), Token, HasToken);
 		}
 		OnParseEnd();
 	}
 
-	bool CppParser::HasToken(size_t Offset) const
+	void CppParser::ParseAttributes(Array<ParsedAttribute>& Attributes, TextToken& Token, bool& HasToken)
 	{
-		return m_TokenAt + Offset < m_Tokens.Size();
-	}
-
-	const TextToken& CppParser::PeekToken(size_t Offset) const
-	{
-		if (!HasToken(Offset))
+		while (HasToken)
 		{
-			ThrowError(TEXT("Unexpected end of file"));
-		}
-		return m_Tokens[m_TokenAt + Offset];
-	}
-
-	TextToken CppParser::TakeToken()
-	{
-		TextToken Token = PeekToken();
-		++m_TokenAt;
-		return Token;
-	}
-
-	bool CppParser::IsToken(const String& Value, size_t Offset) const
-	{
-		return HasToken(Offset) && PeekToken(Offset).Value_Text == Value;
-	}
-
-	bool CppParser::ConsumeToken(const String& Value)
-	{
-		if (!IsToken(Value))
-		{
-			return false;
-		}
-		++m_TokenAt;
-		return true;
-	}
-
-	void CppParser::ExpectToken(const String& Value)
-	{
-		if (!ConsumeToken(Value))
-		{
-			ThrowError(TEXT("Expected '") + Value + TEXT("'"));
-		}
-	}
-
-	void CppParser::ThrowError(const String& Message) const
-	{
-		if (HasToken())
-		{
-			throw TextTokenizerError(Message, PeekToken(), CurrentFile());
-		}
-		TextToken Token;
-		if (m_Tokens.Size() > 0)
-		{
-			Token = m_Tokens[m_Tokens.Size() - 1];
-		}
-		throw TextTokenizerError(Message, Token, CurrentFile());
-	}
-
-	bool CppParser::IsClassDeclaration() const
-	{
-		size_t At = m_TokenAt + 1;
-		if (At >= m_Tokens.Size())
-		{
-			return false;
-		}
-		if (m_Tokens[At].Value_Text == TEXT("[[") || m_Tokens[At].Value_Text == TEXT("alignas") || m_Tokens[At].Value_Text == TEXT("__declspec"))
-		{
-			return true;
-		}
-		if (m_Tokens[At].Type != ETextTokenType::Identifier)
-		{
-			return m_Tokens[At].Value_Text == TEXT("{");
-		}
-
-		while (At < m_Tokens.Size())
-		{
-			++At;
-			if (At < m_Tokens.Size() && m_Tokens[At].Value_Text == TEXT("<"))
+			if (Token.Value_Text == TEXT("[["))
 			{
-				int32 Depth = 1;
-				while (++At < m_Tokens.Size() && Depth > 0)
-				{
-					if (m_Tokens[At].Value_Text == TEXT("<"))
-					{
-						++Depth;
-					}
-					else if (m_Tokens[At].Value_Text == TEXT(">"))
-					{
-						--Depth;
-					}
-					else if (m_Tokens[At].Value_Text == TEXT(">>"))
-					{
-						Depth -= 2;
-					}
-				}
-			}
-			if (At < m_Tokens.Size() && m_Tokens[At].Value_Text == TEXT("::"))
-			{
-				++At;
-				if (At < m_Tokens.Size() && m_Tokens[At].Type == ETextTokenType::Identifier)
-				{
-					continue;
-				}
-			}
-			break;
-		}
-
-		return At < m_Tokens.Size() && (m_Tokens[At].Value_Text == TEXT("{") || m_Tokens[At].Value_Text == TEXT(":") ||
-			m_Tokens[At].Value_Text == TEXT("final") || m_Tokens[At].Value_Text == TEXT(";"));
-	}
-
-	size_t CppParser::FindDeclaratorName(size_t Begin, size_t End) const
-	{
-		size_t Equal = FindTopLevel(Begin, End, TEXT("="));
-		if (Equal < End)
-		{
-			End = Equal;
-		}
-		for (size_t At = Begin; At < End; ++At)
-		{
-			if (m_Tokens[At].Value_Text != TEXT("(") || At + 1 >= End ||
-				(m_Tokens[At + 1].Value_Text != TEXT("*") && m_Tokens[At + 1].Value_Text != TEXT("&") &&
-				m_Tokens[At + 1].Value_Text != TEXT("&&")))
-			{
-				continue;
-			}
-			size_t Close = FindMatching(At, TEXT("("), TEXT(")"));
-			if (Close >= End)
-			{
-				continue;
-			}
-			for (size_t Inner = At + 1; Inner < Close; ++Inner)
-			{
-				if (m_Tokens[Inner].Type == ETextTokenType::Identifier && !IsTypeQualifier(m_Tokens[Inner].Value_Text) &&
-					!IsDeclarationSpecifier(m_Tokens[Inner].Value_Text) && !IsBuiltinType(m_Tokens[Inner].Value_Text))
-				{
-					return Inner;
-				}
-			}
-		}
-
-		int32 Parens = 0;
-		int32 Brackets = 0;
-		int32 Braces = 0;
-		int32 Angles = 0;
-		size_t NameAt = End;
-		for (size_t At = Begin; At < End; ++At)
-		{
-			const String& Value = m_Tokens[At].Value_Text;
-			if (Value == TEXT("(")) ++Parens;
-			else if (Value == TEXT(")")) --Parens;
-			else if (Value == TEXT("[") || Value == TEXT("[[")) ++Brackets;
-			else if (Value == TEXT("]") || Value == TEXT("]]")) --Brackets;
-			else if (Value == TEXT("{")) ++Braces;
-			else if (Value == TEXT("}")) --Braces;
-			else if (Value == TEXT("<")) ++Angles;
-			else if (Value == TEXT(">") && Angles > 0) --Angles;
-			else if (Value == TEXT(">>") && Angles > 0) Angles = Angles > 1 ? Angles - 2 : 0;
-			else if (Parens == 0 && Brackets == 0 && Braces == 0 && Angles == 0 && m_Tokens[At].Type == ETextTokenType::Identifier &&
-				!IsTypeQualifier(Value) && !IsDeclarationSpecifier(Value) && Value != TEXT("typename") && Value != TEXT("class") &&
-				Value != TEXT("struct") && Value != TEXT("union") && Value != TEXT("enum") && Value != TEXT("decltype") &&
-				!IsFunctionTailSpecifier(Value))
-			{
-				if (At + 1 < End && m_Tokens[At + 1].Value_Text == TEXT("("))
-				{
-					return At;
-				}
-				NameAt = At;
-			}
-		}
-		return NameAt;
-	}
-
-	size_t CppParser::FindDeclaratorTypeEnd(size_t Begin, size_t NameAt) const
-	{
-		for (size_t At = Begin; At < NameAt; ++At)
-		{
-			if (m_Tokens[At].Value_Text == TEXT("(") && At + 1 < NameAt &&
-				(m_Tokens[At + 1].Value_Text == TEXT("*") || m_Tokens[At + 1].Value_Text == TEXT("&") ||
-				m_Tokens[At + 1].Value_Text == TEXT("&&") || m_Tokens[At + 1].Value_Text == TEXT("(")))
-			{
-				return At;
-			}
-		}
-
-		int32 Parens = 0;
-		int32 Angles = 0;
-		for (size_t At = Begin; At < NameAt; ++At)
-		{
-			const String& Value = m_Tokens[At].Value_Text;
-			if (Value == TEXT("(")) ++Parens;
-			else if (Value == TEXT(")")) --Parens;
-			else if (Value == TEXT("<")) ++Angles;
-			else if (Value == TEXT(">") && Angles > 0) --Angles;
-			else if (Value == TEXT(">>") && Angles > 0) Angles = Angles > 1 ? Angles - 2 : 0;
-			else if (Parens == 0 && Angles == 0 && (Value == TEXT("*") || Value == TEXT("&") || Value == TEXT("&&")))
-			{
-				return At;
-			}
-		}
-		return NameAt;
-	}
-
-	String CppParser::BuildDeclarator(size_t Begin, size_t End, size_t NameAt) const
-	{
-		size_t Equal = FindTopLevel(Begin, End, TEXT("="));
-		if (Equal < End)
-		{
-			End = Equal;
-		}
-		String Declarator;
-		for (size_t At = Begin; At < End; ++At)
-		{
-			if (Declarator.Size() > 0 && m_Tokens[At].Whitespaces.Size() > 0)
-			{
-				Declarator += TEXT(" ");
-			}
-			if (At == NameAt)
-			{
-				Declarator += TEXT("$");
-			}
-			else
-			{
-				Declarator += m_Tokens[At].RawText.Size() > 0 ? m_Tokens[At].RawText : m_Tokens[At].Value_Text;
-			}
-		}
-		Declarator.Trim();
-		return Declarator;
-	}
-
-	String CppParser::TokensToText(size_t Begin, size_t End) const
-	{
-		String Text;
-		for (size_t At = Begin; At < End; ++At)
-		{
-			const TextToken& Token = m_Tokens[At];
-			if (Text.Size() > 0 && Token.Whitespaces.Size() > 0)
-			{
-				Text += TEXT(" ");
-			}
-			Text += Token.RawText.Size() > 0 ? Token.RawText : Token.Value_Text;
-		}
-		Text.Trim();
-		return Text;
-	}
-
-	size_t CppParser::FindMatching(size_t Open, const String& OpenValue, const String& CloseValue) const
-	{
-		size_t Depth = 0;
-		for (size_t At = Open; At < m_Tokens.Size(); ++At)
-		{
-			if (m_Tokens[At].Value_Text == OpenValue)
-			{
-				++Depth;
-			}
-			else if (m_Tokens[At].Value_Text == CloseValue && --Depth == 0)
-			{
-				return At;
-			}
-		}
-		ThrowError(TEXT("Unterminated balanced token sequence"));
-		return m_Tokens.Size();
-	}
-
-	size_t CppParser::FindTopLevel(size_t Begin, size_t End, const String& Value) const
-	{
-		int32 Parens = 0;
-		int32 Brackets = 0;
-		int32 Braces = 0;
-		int32 Angles = 0;
-		for (size_t At = Begin; At < End; ++At)
-		{
-			const String& Token = m_Tokens[At].Value_Text;
-			if (Token == Value && Parens == 0 && Brackets == 0 && Braces == 0 && Angles == 0)
-			{
-				return At;
-			}
-			if (Token == TEXT("("))
-			{
-				++Parens;
-			}
-			else if (Token == TEXT(")"))
-			{
-				--Parens;
-			}
-			else if (Token == TEXT("[") || Token == TEXT("[["))
-			{
-				++Brackets;
-			}
-			else if (Token == TEXT("]") || Token == TEXT("]]"))
-			{
-				--Brackets;
-			}
-			else if (Token == TEXT("{"))
-			{
-				++Braces;
-			}
-			else if (Token == TEXT("}"))
-			{
-				--Braces;
-			}
-			else if (Token == TEXT("<"))
-			{
-				++Angles;
-			}
-			else if (Token == TEXT(">") && Angles > 0)
-			{
-				--Angles;
-			}
-			else if (Token == TEXT(">>") && Angles > 0)
-			{
-				Angles = Angles > 1 ? Angles - 2 : 0;
-			}
-		}
-		return End;
-	}
-
-	Array<std::pair<size_t, size_t>> CppParser::SplitTopLevel(size_t Begin, size_t End, const String& Value) const
-	{
-		Array<std::pair<size_t, size_t>> Parts;
-		size_t PartBegin = Begin;
-		while (PartBegin <= End)
-		{
-			size_t PartEnd = FindTopLevel(PartBegin, End, Value);
-			Parts.Add({ PartBegin, PartEnd });
-			if (PartEnd == End)
-			{
-				break;
-			}
-			PartBegin = PartEnd + 1;
-		}
-		return Parts;
-	}
-
-	void CppParser::Parse_Declaration()
-	{
-		Array<ParsedAttribute> Attributes;
-		Parse_Attributes(Attributes);
-		if (Attributes.Size() > 0)
-		{
-			m_PendingAttributes = std::move(Attributes);
-		}
-		size_t DeclarationBegin = m_TokenAt;
-		size_t KeywordAt = DeclarationBegin;
-		while (KeywordAt < m_Tokens.Size() && m_Tokens[KeywordAt].Type == ETextTokenType::Identifier &&
-			(IsTypeQualifier(m_Tokens[KeywordAt].Value_Text) || IsDeclarationSpecifier(m_Tokens[KeywordAt].Value_Text)) &&
-			m_Tokens[KeywordAt].Value_Text != TEXT("friend"))
-		{
-			++KeywordAt;
-		}
-		if (KeywordAt > DeclarationBegin && KeywordAt < m_Tokens.Size() &&
-			(m_Tokens[KeywordAt].Value_Text == TEXT("class") || m_Tokens[KeywordAt].Value_Text == TEXT("struct") || m_Tokens[KeywordAt].Value_Text == TEXT("union") || m_Tokens[KeywordAt].Value_Text == TEXT("enum")))
-		{
-			m_TokenAt = KeywordAt;
-			bool IsDefinition = m_Tokens[KeywordAt].Value_Text == TEXT("enum") ?
-				FindTopLevel(KeywordAt, m_Tokens.Size(), TEXT("{")) < FindTopLevel(KeywordAt, m_Tokens.Size(), TEXT(";")) : IsClassDeclaration();
-			if (IsDefinition)
-			{
-				Parse_Type(DeclarationBegin, KeywordAt, m_PendingDeclaredType);
-				for (size_t At = DeclarationBegin; At < KeywordAt; ++At)
-				{
-					if (m_Tokens[At].Value_Text == TEXT("static")) AddFlag(m_PendingVariableFlags, EParsedVariableFlags::IsStatic);
-					else if (m_Tokens[At].Value_Text == TEXT("thread_local")) AddFlag(m_PendingVariableFlags, EParsedVariableFlags::IsThreadLocal);
-					else if (m_Tokens[At].Value_Text == TEXT("constexpr")) AddFlag(m_PendingVariableFlags, EParsedVariableFlags::IsConstexpr);
-				}
-			}
-			else
-			{
-				m_TokenAt = DeclarationBegin;
-				m_PendingDeclaredType = {};
-				m_PendingVariableFlags = EParsedVariableFlags::None;
-			}
-		}
-
-		if (IsToken(TEXT("inline")) && IsToken(TEXT("namespace"), 1))
-		{
-			TakeToken();
-			TakeToken();
-			Parse_Namespace(true);
-		}
-		else if (IsToken(TEXT("namespace")))
-		{
-			TakeToken();
-			Parse_Namespace(false);
-		}
-		else if ((IsToken(TEXT("class")) || IsToken(TEXT("struct")) || IsToken(TEXT("union"))) && IsClassDeclaration())
-		{
-			TextToken Token = TakeToken();
-			EClassType Type = EClassType::Union;
-			if (Token.Value_Text == TEXT("class"))
-			{
-				Type = EClassType::Class;
-			}
-			else if (Token.Value_Text == TEXT("struct"))
-			{
-				Type = EClassType::Struct;
-			}
-			Parse_Class(Type);
-		}
-		else if (IsToken(TEXT("friend")) && (IsToken(TEXT("class"), 1) || IsToken(TEXT("struct"), 1) || IsToken(TEXT("union"), 1)))
-		{
-			TakeToken();
-			TextToken Token = TakeToken();
-			EClassType Type = EClassType::Union;
-			if (Token.Value_Text == TEXT("class"))
-			{
-				Type = EClassType::Class;
-			}
-			else if (Token.Value_Text == TEXT("struct"))
-			{
-				Type = EClassType::Struct;
-			}
-			Parse_Class(Type, true);
-		}
-		else if (IsToken(TEXT("enum")))
-		{
-			TakeToken();
-			Parse_Enum();
-		}
-		else if (IsToken(TEXT("public")) || IsToken(TEXT("protected")) || IsToken(TEXT("private")))
-		{
-			TextToken Token = TakeToken();
-			EAccessSpecifier Access = EAccessSpecifier::Private;
-			if (Token.Value_Text == TEXT("public"))
-			{
-				Access = EAccessSpecifier::Public;
-			}
-			else if (Token.Value_Text == TEXT("protected"))
-			{
-				Access = EAccessSpecifier::Protected;
-			}
-			Parse_Access(Access);
-		}
-		else if (IsToken(TEXT("using")))
-		{
-			Parse_Using(false);
-		}
-		else if (IsToken(TEXT("typedef")))
-		{
-			Parse_Using(true);
-		}
-		else if (IsToken(TEXT("template")))
-		{
-			Parse_Template();
-		}
-		else if (IsToken(TEXT("concept")))
-		{
-			Parse_Concept();
-		}
-		else if (IsToken(TEXT("static_assert")))
-		{
-			Parse_StaticAssert();
-		}
-		else if (IsToken(TEXT("extern")) && HasToken(1) && PeekToken(1).Type == ETextTokenType::Constant && PeekToken(1).ConstantType == ETextTokenConstantType::Text)
-		{
-			Parse_Linkage();
-		}
-		else
-		{
-			Parse_General();
-		}
-	}
-
-	void CppParser::Parse_Name(size_t Begin, size_t End, ParsedName& Name, bool AllowInline)
-	{
-		Name.Segments.Clear();
-		size_t At = Begin;
-		if (At + 1 < End && m_Tokens[At].Value_Text == TEXT(":") && m_Tokens[At + 1].Value_Text == TEXT(":"))
-		{
-			Name.Segments.EmplaceRef();
-			At += 2;
-		}
-		else if (At < End && m_Tokens[At].Value_Text == TEXT("::"))
-		{
-			Name.Segments.EmplaceRef();
-			++At;
-		}
-
-		while (At < End)
-		{
-			bool IsInline = false;
-			if (AllowInline && m_Tokens[At].Value_Text == TEXT("inline"))
-			{
-				IsInline = true;
-				++At;
-			}
-			if (At >= End || m_Tokens[At].Type != ETextTokenType::Identifier)
-			{
-				break;
-			}
-			ParsedNameSegment& Segment = Name.Segments.EmplaceRef();
-			Segment.Name = m_Tokens[At++].Value_Text;
-			Segment.IsInline = IsInline;
-			if (At < End && m_Tokens[At].Value_Text == TEXT("<"))
-			{
-				size_t Close = At + 1;
-				int32 Depth = 1;
-				for (; Close < End; ++Close)
-				{
-					if (m_Tokens[Close].Value_Text == TEXT("<")) ++Depth;
-					else if (m_Tokens[Close].Value_Text == TEXT(">") && --Depth == 0)
-					{
-						break;
-					}
-					else if (m_Tokens[Close].Value_Text == TEXT(">>"))
-					{
-						Depth -= 2;
-						if (Depth <= 0)
-						{
-							break;
-						}
-					}
-				}
-				for (const auto& Part : SplitTopLevel(At + 1, Close, TEXT(",")))
-				{
-					if (Part.first == Part.second)
-					{
-						continue;
-					}
-					ParsedTemplateArgument& Argument = Segment.TemplateArguments.EmplaceRef();
-					const TextToken& First = m_Tokens[Part.first];
-					const bool IsExpression = First.Type == ETextTokenType::Constant || First.Value_Text == TEXT("sizeof") || First.Value_Text == TEXT("&") || First.Value_Text == TEXT("-") || First.Value_Text == TEXT("+");
-					if (IsExpression)
-					{
-						Argument.Kind = ParsedTemplateArgument::EKind::Expression;
-						Argument.Expression.Text = TokensToText(Part.first, Part.second);
-					}
-					else
-					{
-						Parse_Type(Part.first, Part.second, Argument.Type);
-					}
-				}
-				At = Close < End ? Close + 1 : End;
-			}
-			if (At < End && m_Tokens[At].Value_Text == TEXT("::"))
-			{
-				++At;
-			}
-			else if (At + 1 < End && m_Tokens[At].Value_Text == TEXT(":") && m_Tokens[At + 1].Value_Text == TEXT(":"))
-			{
-				At += 2;
-			}
-			else
-			{
-				break;
-			}
-		}
-	}
-
-	void CppParser::Parse_Type(size_t Begin, size_t End, ParsedType& Type)
-	{
-		Type = {};
-		for (size_t At = Begin; At < End; ++At)
-		{
-			if (m_Tokens[At].Value_Text == TEXT("typename"))
-			{
-				Type.IsTypename = true;
-				break;
-			}
-		}
-		while (Begin < End && IsDeclarationSpecifier(m_Tokens[Begin].Value_Text)) ++Begin;
-		for (size_t At = Begin; At < End; ++At)
-		{
-			const String& Value = m_Tokens[At].Value_Text;
-			if (Value == TEXT("const"))
-			{
-				AddFlag(Type.Flags, EParsedTypeFlags::IsConst);
-			}
-			else if (Value == TEXT("volatile"))
-			{
-				AddFlag(Type.Flags, EParsedTypeFlags::IsVolatile);
-			}
-			else if (Value == TEXT("mutable"))
-			{
-				AddFlag(Type.Flags, EParsedTypeFlags::IsMutable);
-			}
-			else if (Value == TEXT("unsigned"))
-			{
-				AddFlag(Type.Flags, EParsedTypeFlags::IsUnsigned);
-			}
-			else if (Value == TEXT("signed"))
-			{
-				AddFlag(Type.Flags, EParsedTypeFlags::IsSigned);
-			}
-			else if (Value == TEXT("class"))
-			{
-				Type.ElaboratedType = EParsedElaboratedType::Class;
-			}
-			else if (Value == TEXT("struct"))
-			{
-				Type.ElaboratedType = EParsedElaboratedType::Struct;
-			}
-			else if (Value == TEXT("union"))
-			{
-				Type.ElaboratedType = EParsedElaboratedType::Union;
-			}
-			else if (Value == TEXT("enum"))
-			{
-				Type.ElaboratedType = EParsedElaboratedType::Enum;
-			}
-			else if (Value == TEXT("decltype") && At + 1 < End && m_Tokens[At + 1].Value_Text == TEXT("("))
-			{
-				size_t Close = FindMatching(At + 1, TEXT("("), TEXT(")"));
-				AddFlag(Type.Flags, EParsedTypeFlags::IsDecltype);
-				Type.Decltype.Text = TokensToText(At + 2, Close);
-				At = Close;
-			}
-			else if (Value == TEXT("*") || Value == TEXT("&") || Value == TEXT("&&"))
-			{
-				ParsedIndirection& Indirection = Type.Indirections.EmplaceRef();
-				if (Value == TEXT("*"))
-				{
-					Indirection.Kind = ParsedIndirection::EKind::Pointer;
-				}
-				else if (Value == TEXT("&"))
-				{
-					Indirection.Kind = ParsedIndirection::EKind::LReference;
-				}
-				else
-				{
-					Indirection.Kind = ParsedIndirection::EKind::RReference;
-				}
-				while (At + 1 < End && IsTypeQualifier(m_Tokens[At + 1].Value_Text))
-				{
-					++At;
-					if (m_Tokens[At].Value_Text == TEXT("const"))
-					{
-						Indirection.IsConst = true;
-					}
-					else if (m_Tokens[At].Value_Text == TEXT("volatile"))
-					{
-						Indirection.IsVolatile = true;
-					}
-					else if (m_Tokens[At].Value_Text == TEXT("mutable"))
-					{
-						Indirection.IsMutable = true;
-					}
-				}
-			}
-		}
-
-		size_t NameBegin = Begin;
-		while (NameBegin < End && (IsTypeQualifier(m_Tokens[NameBegin].Value_Text) || IsDeclarationSpecifier(m_Tokens[NameBegin].Value_Text) ||
-			m_Tokens[NameBegin].Value_Text == TEXT("class") || m_Tokens[NameBegin].Value_Text == TEXT("struct") ||
-			m_Tokens[NameBegin].Value_Text == TEXT("union") || m_Tokens[NameBegin].Value_Text == TEXT("enum") || m_Tokens[NameBegin].Value_Text == TEXT("typename"))) ++NameBegin;
-		if (NameBegin < End && m_Tokens[NameBegin].Value_Text != TEXT("decltype"))
-		{
-			size_t NameEnd = NameBegin;
-			int32 Angles = 0;
-			while (NameEnd < End)
-			{
-				const String& Value = m_Tokens[NameEnd].Value_Text;
-				if (Value == TEXT("<"))
-				{
-					++Angles;
-				}
-				else if (Value == TEXT(">") && Angles > 0)
-				{
-					--Angles;
-				}
-				else if (Value == TEXT(">>") && Angles > 0)
-				{
-					Angles = Angles > 1 ? Angles - 2 : 0;
-				}
-				if (Angles == 0 && (Value == TEXT("*") || Value == TEXT("&") || Value == TEXT("&&") || Value == TEXT("[") || Value == TEXT("(")))
-				{
-					break;
-				}
-				++NameEnd;
-			}
-			Parse_Name(NameBegin, NameEnd, Type.Name);
-			if (Type.Name.Segments.Size() == 1 && IsBuiltinType(Type.Name.Segments[0].Name))
-			{
-				String Builtin = Type.Name.Segments[0].Name;
-				for (size_t At = NameBegin + 1; At < NameEnd; ++At)
-				{
-					if (IsBuiltinType(m_Tokens[At].Value_Text))
-					{
-						Builtin += TEXT(" ") + m_Tokens[At].Value_Text;
-					}
-				}
-				Type.Name.Segments[0].Name = Builtin;
-			}
-		}
-		size_t DeclaratorAt = FindTopLevel(Begin, End, TEXT("("));
-		if (DeclaratorAt < End && DeclaratorAt + 1 < End && (m_Tokens[DeclaratorAt + 1].Value_Text == TEXT("*") ||
-			m_Tokens[DeclaratorAt + 1].Value_Text == TEXT("&") || m_Tokens[DeclaratorAt + 1].Value_Text == TEXT("&&")))
-		{
-			Type.Declarator = TokensToText(DeclaratorAt, End);
-		}
-	}
-
-	void CppParser::Parse_Attributes(Array<ParsedAttribute>& Attributes)
-	{
-		size_t At = m_TokenAt;
-		Parse_Attributes(At, m_Tokens.Size(), Attributes);
-		m_TokenAt = At;
-	}
-
-	void CppParser::Parse_Attributes(size_t& At, size_t End, Array<ParsedAttribute>& Attributes)
-	{
-		while (At < End)
-		{
-			if (m_Tokens[At].Value_Text == TEXT("[["))
-			{
-				size_t Close = At + 1;
-				while (Close < End && m_Tokens[Close].Value_Text != TEXT("]]")) ++Close;
-				if (Close == End)
-				{
-					ThrowError(TEXT("Unterminated attribute"));
-				}
-				for (const auto& Part : SplitTopLevel(At + 1, Close, TEXT(",")))
+				Advance(Token, HasToken);
+				while (HasToken && Token.Value_Text != TEXT("]]"))
 				{
 					ParsedAttribute& Attribute = Attributes.EmplaceRef();
 					Attribute.Kind = ParsedAttribute::EKind::Standard;
-					Attribute.Text = TokensToText(Part.first, Part.second);
-					size_t Open = FindTopLevel(Part.first, Part.second, TEXT("("));
-					size_t NameEnd = Open == Part.second ? Part.second : Open;
-					Parse_Name(Part.first, NameEnd, Attribute.Name);
-					if (Open < Part.second)
-					{
-						Attribute.Arguments.EmplaceRef().Text = TokensToText(Open + 1, Part.second - 1);
-					}
+					ReadExpressionUntil(Attribute.Text, TEXT(","), TEXT("]]"), Token, HasToken);
+					if (Token.Value_Text == TEXT(",")) Advance(Token, HasToken);
 				}
-				At = Close + 1;
+				Expect(TEXT("]]"), Token, HasToken);
+				continue;
 			}
-			else if (m_Tokens[At].Value_Text == TEXT("alignas") || m_Tokens[At].Value_Text == TEXT("__declspec") || m_Tokens[At].Value_Text == TEXT("__attribute__"))
+
+			ParsedAttribute::EKind Kind;
+			if (Token.Value_Text == TEXT("alignas")) Kind = ParsedAttribute::EKind::Alignas;
+			else if (Token.Value_Text == TEXT("__declspec")) Kind = ParsedAttribute::EKind::Declspec;
+			else if (Token.Value_Text == TEXT("__attribute__")) Kind = ParsedAttribute::EKind::Gnu;
+			else break;
+
+			Advance(Token, HasToken);
+			if (!HasToken || Token.Value_Text != TEXT("(")) break;
+			ParsedAttribute& Attribute = Attributes.EmplaceRef();
+			Attribute.Kind = Kind;
+			Advance(Token, HasToken);
+			String Text;
+			int32 Depth = 1;
+			while (HasToken && Depth > 0)
 			{
-				const String Kind = m_Tokens[At].Value_Text;
-				if (At + 1 >= End || m_Tokens[At + 1].Value_Text != TEXT("("))
+				if (Token.Value_Text == TEXT("(")) ++Depth;
+				else if (Token.Value_Text == TEXT(")") && --Depth == 0)
 				{
+					Advance(Token, HasToken);
 					break;
 				}
-				size_t Close = FindMatching(At + 1, TEXT("("), TEXT(")"));
-				ParsedAttribute& Attribute = Attributes.EmplaceRef();
-				if (Kind == TEXT("alignas"))
-				{
-					Attribute.Kind = ParsedAttribute::EKind::Alignas;
-				}
-				else if (Kind == TEXT("__declspec"))
-				{
-					Attribute.Kind = ParsedAttribute::EKind::Declspec;
-				}
-				else
-				{
-					Attribute.Kind = ParsedAttribute::EKind::Gnu;
-				}
-				if (Attribute.Kind == ParsedAttribute::EKind::Declspec)
-				{
-					Parse_Name(At + 2, Close, Attribute.Name);
-				}
-				else
-				{
-					size_t ArgBegin = At + 2;
-					size_t ArgEnd = Close;
-					if (Attribute.Kind == ParsedAttribute::EKind::Gnu && ArgBegin < ArgEnd && m_Tokens[ArgBegin].Value_Text == TEXT("("))
-					{
-						++ArgBegin;
-						--ArgEnd;
-					}
-					Attribute.Arguments.EmplaceRef().Text = TokensToText(ArgBegin, ArgEnd);
-				}
-				At = Close + 1;
+				AppendTokenText(Text, Token);
+				Advance(Token, HasToken);
+			}
+			Text.Trim();
+			if (Kind == ParsedAttribute::EKind::Declspec)
+			{
+				AddNameSegment(Attribute.Name, Text);
 			}
 			else
 			{
-				break;
+				Attribute.Arguments.EmplaceRef().Text = std::move(Text);
 			}
 		}
 	}
 
-	void CppParser::Parse_Namespace(bool IsInline)
+	void CppParser::ParseDeclaration(TextToken& Token, bool& HasToken)
+	{
+		Array<ParsedAttribute> Attributes;
+		ParseAttributes(Attributes, Token, HasToken);
+		if (Attributes.Size() > 0) m_PendingAttributes = std::move(Attributes);
+		if (!HasToken) return;
+
+		if (Token.Value_Text == TEXT("inline"))
+		{
+			Advance(Token, HasToken);
+			if (HasToken && Token.Value_Text == TEXT("namespace"))
+			{
+				Advance(Token, HasToken);
+				ParseNamespace(true, Token, HasToken);
+				return;
+			}
+			ParsedType Type;
+			EParsedVariableFlags Flags = EParsedVariableFlags::IsInline;
+			ParseGeneral(Token, HasToken, std::move(Type), Flags);
+			return;
+		}
+		if (Token.Value_Text == TEXT("namespace"))
+		{
+			Advance(Token, HasToken);
+			ParseNamespace(false, Token, HasToken);
+		}
+		else if (Token.Value_Text == TEXT("class") || Token.Value_Text == TEXT("struct") || Token.Value_Text == TEXT("union"))
+		{
+			const String Value = Token.Value_Text;
+			Advance(Token, HasToken);
+			ParseClass(Value == TEXT("class") ? EClassType::Class : Value == TEXT("struct") ? EClassType::Struct : EClassType::Union, false, Token, HasToken);
+		}
+		else if (Token.Value_Text == TEXT("friend"))
+		{
+			Advance(Token, HasToken);
+			if (HasToken && (Token.Value_Text == TEXT("class") || Token.Value_Text == TEXT("struct") || Token.Value_Text == TEXT("union")))
+			{
+				const String Value = Token.Value_Text;
+				Advance(Token, HasToken);
+				ParseClass(Value == TEXT("class") ? EClassType::Class : Value == TEXT("struct") ? EClassType::Struct : EClassType::Union, true, Token, HasToken);
+			}
+			else ParseGeneral(Token, HasToken);
+		}
+		else if (Token.Value_Text == TEXT("enum"))
+		{
+			Advance(Token, HasToken);
+			ParseEnum(Token, HasToken);
+		}
+		else if (Token.Value_Text == TEXT("public") || Token.Value_Text == TEXT("protected") || Token.Value_Text == TEXT("private"))
+		{
+			const String Value = Token.Value_Text;
+			Advance(Token, HasToken);
+			Expect(TEXT(":"), Token, HasToken);
+			OnParsed_Access(Value == TEXT("public") ? EAccessSpecifier::Public : Value == TEXT("protected") ? EAccessSpecifier::Protected : EAccessSpecifier::Private);
+		}
+		else if (Token.Value_Text == TEXT("using")) ParseUsing(false, Token, HasToken);
+		else if (Token.Value_Text == TEXT("typedef")) ParseUsing(true, Token, HasToken);
+		else if (Token.Value_Text == TEXT("template")) ParseTemplate(Token, HasToken);
+		else if (Token.Value_Text == TEXT("concept")) ParseConcept(Token, HasToken);
+		else if (Token.Value_Text == TEXT("static_assert")) ParseStaticAssert(Token, HasToken);
+		else if (Token.Value_Text == TEXT("extern"))
+		{
+			Advance(Token, HasToken);
+			if (HasToken && Token.Type == ETextTokenType::Constant && Token.ConstantType == ETextTokenConstantType::Text) ParseLinkage(Token, HasToken);
+			else
+			{
+				EParsedVariableFlags Flags = EParsedVariableFlags::IsExtern;
+				ParseGeneral(Token, HasToken, {}, Flags);
+			}
+		}
+		else ParseGeneral(Token, HasToken);
+	}
+
+	void CppParser::ParseNamespace(bool IsInline, TextToken& Token, bool& HasToken)
 	{
 		ParsedNamespace Namespace;
 		Namespace.Attributes = std::move(m_PendingAttributes);
-		Parse_Attributes(Namespace.Attributes);
-		const size_t NameBegin = m_TokenAt;
-		while (HasToken() && !IsToken(TEXT("{")) && !IsToken(TEXT("="))) ++m_TokenAt;
-		Parse_Name(NameBegin, m_TokenAt, Namespace.Name, true);
-		if (Namespace.Name.Segments.Size() > 0)
+		ParseAttributes(Namespace.Attributes, Token, HasToken);
+		bool First = true;
+		while (HasToken && Token.Value_Text != TEXT("{") && Token.Value_Text != TEXT("="))
 		{
-			Namespace.Name.Segments[0].IsInline = IsInline;
+			bool SegmentInline = false;
+			if (Token.Value_Text == TEXT("inline"))
+			{
+				SegmentInline = true;
+				Advance(Token, HasToken);
+			}
+			if (HasToken && Token.Type == ETextTokenType::Identifier)
+			{
+				ParsedNameSegment& Segment = Namespace.Name.Segments.EmplaceRef();
+				Segment.Name = Token.Value_Text;
+				Segment.IsInline = First ? IsInline : SegmentInline;
+				First = false;
+			}
+			Advance(Token, HasToken);
 		}
-		if (ConsumeToken(TEXT("=")))
+		if (HasToken && Token.Value_Text == TEXT("="))
 		{
+			Advance(Token, HasToken);
 			ParsedNamespaceAlias Alias;
 			Alias.Name = Namespace.Name;
 			Alias.Attributes = Namespace.Attributes;
-			const size_t TargetBegin = m_TokenAt;
-			m_TokenAt = FindTopLevel(TargetBegin, m_Tokens.Size(), TEXT(";"));
-			Parse_Name(TargetBegin, m_TokenAt, Alias.Target);
-			ExpectToken(TEXT(";"));
+			while (HasToken && Token.Value_Text != TEXT(";"))
+			{
+				if (Token.Type == ETextTokenType::Identifier) AddNameSegment(Alias.Target, Token.Value_Text);
+				else if (Token.Value_Text == TEXT("::") && Alias.Target.Segments.Size() == 0) Alias.Target.Segments.EmplaceRef();
+				Advance(Token, HasToken);
+			}
+			Expect(TEXT(";"), Token, HasToken);
 			OnParsed_NamespaceAlias(Alias);
 			return;
 		}
-		ExpectToken(TEXT("{"));
+		Expect(TEXT("{"), Token, HasToken);
 		OnParsed_Namespace(Namespace);
-		m_Scopes.Add({ EScopeType::Namespace, {}, EParsedElaboratedType::None });
+		m_Scopes.Add({ EScopeType::Namespace });
 	}
 
-	void CppParser::Parse_Class(EClassType Type, bool IsFriend)
+	void CppParser::ParseClass(EClassType Type, bool IsFriend, TextToken& Token, bool& HasToken)
 	{
 		ParsedClass Class;
 		Class.Type = Type;
 		Class.IsFriend = IsFriend;
 		Class.Attributes = std::move(m_PendingAttributes);
-		Parse_Attributes(Class.Attributes);
-		if (HasToken() && PeekToken().Type == ETextTokenType::Identifier && !IsToken(TEXT("final")))
+		ParseAttributes(Class.Attributes, Token, HasToken);
+		if (HasToken && Token.Type == ETextTokenType::Identifier && Token.Value_Text != TEXT("final"))
 		{
-			size_t NameEnd = m_TokenAt + 1;
-			if (NameEnd < m_Tokens.Size() && m_Tokens[NameEnd].Value_Text == TEXT("<"))
+			AddNameSegment(Class.Name, Token.Value_Text);
+			Advance(Token, HasToken);
+			if (HasToken && Token.Value_Text == TEXT("<"))
 			{
-				int32 Depth = 0;
-				for (; NameEnd < m_Tokens.Size(); ++NameEnd)
+				Advance(Token, HasToken);
+				bool Closed = false;
+				while (HasToken && !Closed)
 				{
-					if (m_Tokens[NameEnd].Value_Text == TEXT("<")) ++Depth;
-					else if (m_Tokens[NameEnd].Value_Text == TEXT(">") && --Depth == 0)
+					ParsedTemplateArgument& Argument = Class.Specialization.EmplaceRef();
+					String Text;
+					int32 Depth = 0;
+					while (HasToken)
 					{
-						++NameEnd;
-						break;
+						if (Token.Value_Text == TEXT(",") && Depth == 0) break;
+						if (Token.Value_Text == TEXT(">") && Depth == 0)
+						{
+							Closed = true;
+							break;
+						}
+						if (Token.Value_Text == TEXT(">>"))
+						{
+							if (Depth <= 1)
+							{
+								if (Depth == 1) Text += TEXT(">");
+								Closed = true;
+								break;
+							}
+							Depth -= 2;
+						}
+						else if (Token.Value_Text == TEXT("<")) ++Depth;
+						else if (Token.Value_Text == TEXT(">") && Depth > 0) --Depth;
+						AppendTokenText(Text, Token);
+						Advance(Token, HasToken);
 					}
-					else if (m_Tokens[NameEnd].Value_Text == TEXT(">>") && (Depth -= 2) <= 0)
-					{
-						++NameEnd;
-						break;
-					}
+					Argument.Kind = ParsedTemplateArgument::EKind::Type;
+					AddNameSegment(Argument.Type.Name, Text);
+					if (Token.Value_Text == TEXT(",")) Advance(Token, HasToken);
+					else if (Closed) Advance(Token, HasToken);
 				}
 			}
-			Parse_Name(m_TokenAt, NameEnd, Class.Name);
-			if (Class.Name.Segments.Size() > 0)
-			{
-				Class.Specialization = std::move(Class.Name.Segments[Class.Name.Segments.Size() - 1].TemplateArguments);
-			}
-			m_TokenAt = NameEnd;
 		}
-		else
-		{
-			Class.IsAnonymous = true;
-		}
-		Parse_Attributes(Class.Attributes);
-		if (ConsumeToken(TEXT("final")))
+		else Class.IsAnonymous = Type != EClassType::Union;
+		ParseAttributes(Class.Attributes, Token, HasToken);
+		if (HasToken && Token.Value_Text == TEXT("final"))
 		{
 			Class.IsFinal = true;
+			Advance(Token, HasToken);
 		}
-		if (ConsumeToken(TEXT(":")))
+		if (HasToken && Token.Value_Text == TEXT(":"))
 		{
-			size_t BasesBegin = m_TokenAt;
-			while (HasToken() && !IsToken(TEXT("{")) && !IsToken(TEXT(";"))) ++m_TokenAt;
-			for (const auto& Part : SplitTopLevel(BasesBegin, m_TokenAt, TEXT(",")))
+			Advance(Token, HasToken);
+			while (HasToken && Token.Value_Text != TEXT("{") && Token.Value_Text != TEXT(";"))
 			{
 				ParsedBaseClass& Base = Class.BaseClasses.EmplaceRef();
-				Base.AccessSpecifier = EAccessSpecifier::Public;
-				if (Type == EClassType::Class)
+				Base.AccessSpecifier = Type == EClassType::Class ? EAccessSpecifier::Private : EAccessSpecifier::Public;
+				while (HasToken && Token.Value_Text != TEXT(",") && Token.Value_Text != TEXT("{"))
 				{
-					Base.AccessSpecifier = EAccessSpecifier::Private;
+					if (Token.Value_Text == TEXT("public")) Base.AccessSpecifier = EAccessSpecifier::Public;
+					else if (Token.Value_Text == TEXT("protected")) Base.AccessSpecifier = EAccessSpecifier::Protected;
+					else if (Token.Value_Text == TEXT("private")) Base.AccessSpecifier = EAccessSpecifier::Private;
+					else if (Token.Value_Text == TEXT("virtual")) Base.IsVirtual = true;
+					else if (Token.Type == ETextTokenType::Identifier) AddNameSegment(Base.Type.Name, Token.Value_Text);
+					Advance(Token, HasToken);
 				}
-				size_t At = Part.first;
-				while (At < Part.second)
-				{
-					if (m_Tokens[At].Value_Text == TEXT("public"))
-					{
-						Base.AccessSpecifier = EAccessSpecifier::Public;
-					}
-					else if (m_Tokens[At].Value_Text == TEXT("protected"))
-					{
-						Base.AccessSpecifier = EAccessSpecifier::Protected;
-					}
-					else if (m_Tokens[At].Value_Text == TEXT("private"))
-					{
-						Base.AccessSpecifier = EAccessSpecifier::Private;
-					}
-					else if (m_Tokens[At].Value_Text == TEXT("virtual"))
-					{
-						Base.IsVirtual = true;
-					}
-					else
-					{
-						break;
-					}
-					++At;
-				}
-				Parse_Type(At, Part.second, Base.Type);
+				if (HasToken && Token.Value_Text == TEXT(",")) Advance(Token, HasToken);
 			}
 		}
-		if (ConsumeToken(TEXT(";")))
+		if (HasToken && Token.Value_Text == TEXT(";"))
 		{
 			Class.IsForward = true;
+			Advance(Token, HasToken);
 			OnParsed_Class(Class);
 			return;
 		}
-		ExpectToken(TEXT("{"));
+		if (!HasToken || Token.Value_Text != TEXT("{"))
+		{
+			ParsedType Declared = std::move(m_PendingDeclaredType);
+			Declared.ElaboratedType = Type == EClassType::Class ? EParsedElaboratedType::Class : Type == EClassType::Struct ? EParsedElaboratedType::Struct : EParsedElaboratedType::Union;
+			Declared.Name = Class.Name;
+			ParseGeneral(Token, HasToken, std::move(Declared), m_PendingVariableFlags);
+			m_PendingVariableFlags = EParsedVariableFlags::None;
+			return;
+		}
+		Advance(Token, HasToken);
 		Class.HasBody = true;
 		OnParsed_Class(Class);
 		Scope ScopeData;
 		ScopeData.Type = EScopeType::Class;
-		if (Type == EClassType::Class)
-		{
-			ScopeData.ElaboratedType = EParsedElaboratedType::Class;
-		}
-		else if (Type == EClassType::Struct)
-		{
-			ScopeData.ElaboratedType = EParsedElaboratedType::Struct;
-		}
-		else
-		{
-			ScopeData.ElaboratedType = EParsedElaboratedType::Union;
-		}
+		ScopeData.ElaboratedType = Type == EClassType::Class ? EParsedElaboratedType::Class : Type == EClassType::Struct ? EParsedElaboratedType::Struct : EParsedElaboratedType::Union;
 		ScopeData.DeclaredType = std::move(m_PendingDeclaredType);
-		ScopeData.DeclaredType.ElaboratedType = ScopeData.ElaboratedType;
 		ScopeData.VariableFlags = m_PendingVariableFlags;
 		m_PendingVariableFlags = EParsedVariableFlags::None;
-		if (Class.Name.Segments.Size() > 0)
-		{
-			ScopeData.Name = Class.Name.Segments[Class.Name.Segments.Size() - 1].Name;
-		}
+		if (Class.Name.Segments.Size() > 0) ScopeData.Name = Class.Name.Segments[Class.Name.Segments.Size() - 1].Name;
 		m_Scopes.Add(std::move(ScopeData));
 	}
 
-	void CppParser::Parse_Enum()
+	void CppParser::ParseEnum(TextToken& Token, bool& HasToken)
 	{
 		ParsedEnum Enum;
 		Enum.Attributes = std::move(m_PendingAttributes);
-		if (ConsumeToken(TEXT("class")))
+		if (HasToken && (Token.Value_Text == TEXT("class") || Token.Value_Text == TEXT("struct")))
 		{
 			Enum.IsScoped = true;
+			Enum.IsStruct = Token.Value_Text == TEXT("struct");
+			Advance(Token, HasToken);
 		}
-		else if (ConsumeToken(TEXT("struct")))
+		ParseAttributes(Enum.Attributes, Token, HasToken);
+		if (HasToken && Token.Type == ETextTokenType::Identifier)
 		{
-			Enum.IsScoped = true;
-			Enum.IsStruct = true;
+			AddNameSegment(Enum.Name, Token.Value_Text);
+			Advance(Token, HasToken);
 		}
-		Parse_Attributes(Enum.Attributes);
-		if (HasToken() && PeekToken().Type == ETextTokenType::Identifier)
+		else Enum.IsAnonymous = true;
+		ParseAttributes(Enum.Attributes, Token, HasToken);
+		if (HasToken && Token.Value_Text == TEXT(":"))
 		{
-			Parse_Name(m_TokenAt, m_TokenAt + 1, Enum.Name);
-			++m_TokenAt;
+			Advance(Token, HasToken);
+			while (HasToken && Token.Value_Text != TEXT("{") && Token.Value_Text != TEXT(";"))
+			{
+				if (Token.Type == ETextTokenType::Identifier) AddNameSegment(Enum.UnderlyingType.Name, Token.Value_Text);
+				Advance(Token, HasToken);
+			}
 		}
-		else
-		{
-			Enum.IsAnonymous = true;
-		}
-		Parse_Attributes(Enum.Attributes);
-		if (ConsumeToken(TEXT(":")))
-		{
-			size_t Begin = m_TokenAt;
-			while (HasToken() && !IsToken(TEXT("{")) && !IsToken(TEXT(";"))) ++m_TokenAt;
-			Parse_Type(Begin, m_TokenAt, Enum.UnderlyingType);
-		}
-		if (ConsumeToken(TEXT(";")))
+		if (HasToken && Token.Value_Text == TEXT(";"))
 		{
 			Enum.IsForward = true;
+			Advance(Token, HasToken);
 			OnParsed_Enum(Enum);
 			return;
 		}
-		ExpectToken(TEXT("{"));
-		OnParsed_Enum(Enum);
-		while (HasToken() && !IsToken(TEXT("}")))
+		if (!HasToken || Token.Value_Text != TEXT("{"))
 		{
-			if (ConsumeToken(TEXT(",")))
-			{
-				continue;
-			}
-			ParsedEnumValue Value;
-			if (PeekToken().Type != ETextTokenType::Identifier)
-			{
-				ThrowError(TEXT("Expected enum value"));
-			}
-			Value.Name = TakeToken().Value_Text;
-			Parse_Attributes(Value.Attributes);
-			if (ConsumeToken(TEXT("=")))
-			{
-				Value.HasValue = true;
-				size_t Begin = m_TokenAt;
-				size_t End = FindTopLevel(Begin, m_Tokens.Size(), TEXT(","));
-				size_t BraceEnd = FindTopLevel(Begin, m_Tokens.Size(), TEXT("}"));
-				if (BraceEnd < End)
-				{
-					End = BraceEnd;
-				}
-				Value.Value.Text = TokensToText(Begin, End);
-				m_TokenAt = End;
-			}
-			OnParsed_EnumValue(Value);
-			ConsumeToken(TEXT(","));
-		}
-		ExpectToken(TEXT("}"));
-		OnParsed_ScopeEnd();
-		if (!ConsumeToken(TEXT(";")))
-		{
-			size_t Begin = m_TokenAt;
-			m_TokenAt = FindTopLevel(Begin, m_Tokens.Size(), TEXT(";"));
-			size_t End = m_TokenAt;
-			ExpectToken(TEXT(";"));
 			ParsedType Type = std::move(m_PendingDeclaredType);
 			Type.ElaboratedType = EParsedElaboratedType::Enum;
 			Type.Name = Enum.Name;
-			for (const auto& Part : SplitTopLevel(Begin, End, TEXT(",")))
+			ParseGeneral(Token, HasToken, std::move(Type), m_PendingVariableFlags);
+			m_PendingVariableFlags = EParsedVariableFlags::None;
+			return;
+		}
+		Expect(TEXT("{"), Token, HasToken);
+		OnParsed_Enum(Enum);
+		while (HasToken && Token.Value_Text != TEXT("}"))
+		{
+			if (Token.Value_Text == TEXT(","))
 			{
-				size_t NameAt = FindDeclaratorName(Part.first, Part.second);
-				if (NameAt < Part.second)
+				Advance(Token, HasToken);
+				continue;
+			}
+			if (Token.Type != ETextTokenType::Identifier) ThrowError(TEXT("Expected enum value"), Token, HasToken);
+			ParsedEnumValue Value;
+			Value.Name = Token.Value_Text;
+			Advance(Token, HasToken);
+			ParseAttributes(Value.Attributes, Token, HasToken);
+			if (HasToken && Token.Value_Text == TEXT("="))
+			{
+				Value.HasValue = true;
+				Advance(Token, HasToken);
+				ReadExpressionUntil(Value.Value.Text, TEXT(","), TEXT("}"), Token, HasToken);
+			}
+			OnParsed_EnumValue(Value);
+			if (HasToken && Token.Value_Text == TEXT(",")) Advance(Token, HasToken);
+		}
+		Expect(TEXT("}"), Token, HasToken);
+		OnParsed_ScopeEnd();
+		if (HasToken && Token.Value_Text == TEXT(";"))
+		{
+			Advance(Token, HasToken);
+			return;
+		}
+		ParsedType Type = std::move(m_PendingDeclaredType);
+		Type.ElaboratedType = EParsedElaboratedType::Enum;
+		Type.Name = Enum.Name;
+		ParseGeneral(Token, HasToken, std::move(Type), m_PendingVariableFlags);
+		m_PendingVariableFlags = EParsedVariableFlags::None;
+	}
+
+	void CppParser::ParseUsing(bool IsTypedef, TextToken& Token, bool& HasToken)
+	{
+		Advance(Token, HasToken);
+		ParsedUsing Using;
+		Using.Attributes = std::move(m_PendingAttributes);
+		Using.Kind = IsTypedef ? ParsedUsing::EKind::Typedef : ParsedUsing::EKind::UsingDeclaration;
+		if (IsTypedef && HasToken && (Token.Value_Text == TEXT("class") || Token.Value_Text == TEXT("struct") || Token.Value_Text == TEXT("union")))
+		{
+			String InlineDefinition = Token.Value_Text;
+			Advance(Token, HasToken);
+			ParseAttributes(Using.Attributes, Token, HasToken);
+			if (HasToken && Token.Type == ETextTokenType::Identifier)
+			{
+				InlineDefinition += TEXT(" ") + Token.Value_Text;
+				Advance(Token, HasToken);
+			}
+			ParseAttributes(Using.Attributes, Token, HasToken);
+			if (HasToken && Token.Value_Text == TEXT("{"))
+			{
+				InlineDefinition += TEXT(" ");
+				SkipBalanced(TEXT("{"), TEXT("}"), Token, HasToken, &InlineDefinition);
+			}
+
+			Array<ParsedUsing> Aliases;
+			while (HasToken && Token.Value_Text != TEXT(";"))
+			{
+				ParsedUsing Alias;
+				Alias.Kind = ParsedUsing::EKind::Typedef;
+				String Declarator;
+				String Name;
+				while (HasToken && Token.Value_Text != TEXT(",") && Token.Value_Text != TEXT(";"))
 				{
-					Parse_Variable(Part.first, Part.second, NameAt, Type, m_PendingVariableFlags);
+					if (Token.Type == ETextTokenType::Identifier) Name = Token.Value_Text;
+					else AppendTokenText(Declarator, Token);
+					Advance(Token, HasToken);
+				}
+				if (Name.Size() > 0)
+				{
+					AddNameSegment(Alias.Name, Name);
+					Declarator.Trim();
+					if (Declarator.Size() > 0) Alias.Type.Declarator = Declarator + TEXT("$");
+					Aliases.Add(std::move(Alias));
+				}
+				if (HasToken && Token.Value_Text == TEXT(",")) Advance(Token, HasToken);
+			}
+			Expect(TEXT(";"), Token, HasToken);
+
+			size_t Canonical = 0;
+			for (size_t Index = 0; Index < Aliases.Size(); ++Index)
+			{
+				if (Aliases[Index].Type.Declarator.Size() == 0)
+				{
+					Canonical = Index;
+					break;
 				}
 			}
-			m_PendingVariableFlags = EParsedVariableFlags::None;
+			if (Aliases.Size() > 0)
+			{
+				Aliases[Canonical].Attributes = std::move(Using.Attributes);
+				String CanonicalName = Aliases[Canonical].Name.Segments[0].Name;
+				String CanonicalDeclarator = Aliases[Canonical].Type.Declarator;
+				Aliases[Canonical].Type = {};
+				Aliases[Canonical].Type.Declarator = InlineDefinition + TEXT(" ") +
+					(CanonicalDeclarator.Size() > 0 ? CanonicalDeclarator : TEXT("$"));
+				OnParsed_Using(Aliases[Canonical]);
+				for (size_t Index = 0; Index < Aliases.Size(); ++Index)
+				{
+					if (Index == Canonical) continue;
+					AddNameSegment(Aliases[Index].Type.Name, CanonicalName);
+					OnParsed_Using(Aliases[Index]);
+				}
+			}
+			return;
 		}
-	}
-
-	void CppParser::Parse_Access(EAccessSpecifier Access)
-	{
-		ExpectToken(TEXT(":"));
-		OnParsed_Access(Access);
-	}
-
-	void CppParser::Parse_Using(bool IsTypedef)
-	{
-		TakeToken();
-		size_t Begin = m_TokenAt;
-		m_TokenAt = FindTopLevel(Begin, m_Tokens.Size(), TEXT(";"));
-		size_t End = m_TokenAt;
-		ExpectToken(TEXT(";"));
-		if (!IsTypedef && Begin < End && m_Tokens[Begin].Value_Text == TEXT("namespace"))
+		if (!IsTypedef && HasToken && Token.Value_Text == TEXT("namespace"))
 		{
-			ParsedUsing Using;
-			Using.Attributes = std::move(m_PendingAttributes);
 			Using.Kind = ParsedUsing::EKind::UsingDirective;
-			Parse_Name(Begin + 1, End, Using.Target);
+			Advance(Token, HasToken);
+			while (HasToken && Token.Value_Text != TEXT(";"))
+			{
+				if (Token.Type == ETextTokenType::Identifier) AddNameSegment(Using.Target, Token.Value_Text);
+				Advance(Token, HasToken);
+			}
+			Expect(TEXT(";"), Token, HasToken);
 			OnParsed_Using(Using);
 			return;
 		}
+
 		if (!IsTypedef)
 		{
-			size_t Equal = FindTopLevel(Begin, End, TEXT("="));
-			ParsedUsing Using;
-			Using.Attributes = std::move(m_PendingAttributes);
-			if (Equal < End)
+			if (HasToken && Token.Value_Text == TEXT("::"))
+			{
+				Advance(Token, HasToken);
+			}
+			if (!HasToken || Token.Type != ETextTokenType::Identifier) ThrowError(TEXT("Expected using name"), Token, HasToken);
+			String First = Token.Value_Text;
+			Advance(Token, HasToken);
+			ParseAttributes(Using.Attributes, Token, HasToken);
+			if (HasToken && Token.Value_Text == TEXT("="))
 			{
 				Using.Kind = ParsedUsing::EKind::AliasDeclaration;
-				size_t AttributeAt = FindTopLevel(Begin, Equal, TEXT("[["));
-				size_t NameEnd = AttributeAt < Equal ? AttributeAt : Equal;
-				Parse_Name(Begin, NameEnd, Using.Name);
-				if (AttributeAt < Equal)
+				AddNameSegment(Using.Name, First);
+				Advance(Token, HasToken);
+				bool InDeclarator = false;
+				String PendingSegment;
+				while (HasToken && Token.Value_Text != TEXT(";"))
 				{
-					Parse_Attributes(AttributeAt, Equal, Using.Attributes);
-				}
-				size_t DeclaratorAt = FindTopLevel(Equal + 1, End, TEXT("("));
-				if (DeclaratorAt < End && DeclaratorAt + 1 < End && (m_Tokens[DeclaratorAt + 1].Value_Text == TEXT("*") || m_Tokens[DeclaratorAt + 1].Value_Text == TEXT("&") || m_Tokens[DeclaratorAt + 1].Value_Text == TEXT("&&")))
-				{
-					Parse_Type(Equal + 1, DeclaratorAt, Using.Type);
-					Using.Type.Declarator = TokensToText(DeclaratorAt, End);
-				}
-				else
-				{
-					Parse_Type(Equal + 1, End, Using.Type);
-				}
-			}
-			else
-			{
-				Using.Kind = ParsedUsing::EKind::UsingDeclaration;
-				Parse_Name(Begin, End, Using.Target);
-			}
-			OnParsed_Using(Using);
-			return;
-		}
-		auto Parts = SplitTopLevel(Begin, End, TEXT(","));
-		size_t FirstNameAt = Parts.Size() > 0 ? FindDeclaratorName(Parts[0].first, Parts[0].second) : End;
-		size_t BaseEnd = FirstNameAt < End ? FindDeclaratorTypeEnd(Begin, FirstNameAt) : End;
-		size_t BodyAt = FindTopLevel(Begin, BaseEnd, TEXT("{"));
-		size_t BodyEnd = BodyAt < BaseEnd ? FindMatching(BodyAt, TEXT("{"), TEXT("}")) + 1 : BodyAt;
-		ParsedType BaseType;
-		Parse_Type(Begin, BodyAt < BaseEnd ? BodyAt : BaseEnd, BaseType);
-		String InlineDefinition;
-		if (BodyAt < BaseEnd)
-		{
-			InlineDefinition = TokensToText(BodyAt, BodyEnd);
-		}
-		if (InlineDefinition.Size() > 0)
-		{
-			size_t OriginalIndex = Parts.Size();
-			for (size_t Index = 0; Index < Parts.Size(); ++Index)
-			{
-				const auto& Part = Parts[Index];
-				size_t NameAt = FindDeclaratorName(Part.first, Part.second);
-				if (NameAt == Part.second)
-				{
-					continue;
-				}
-				size_t DeclaratorBegin = Part.first == Begin ? BaseEnd : Part.first;
-				if (BuildDeclarator(DeclaratorBegin, Part.second, NameAt) == TEXT("$"))
-				{
-					OriginalIndex = Index;
-					break;
-				}
-			}
-			if (OriginalIndex < Parts.Size())
-			{
-				const auto& OriginalPart = Parts[OriginalIndex];
-				size_t OriginalNameAt = FindDeclaratorName(OriginalPart.first, OriginalPart.second);
-				ParsedUsing Original;
-				Original.Kind = ParsedUsing::EKind::Typedef;
-				Original.Attributes = std::move(m_PendingAttributes);
-				Original.Type = BaseType;
-				Original.Type.Declarator = InlineDefinition + TEXT(" $");
-				Parse_Name(OriginalNameAt, OriginalNameAt + 1, Original.Name);
-				OnParsed_Using(Original);
-
-				ParsedName OriginalName = Original.Name;
-				for (size_t Index = 0; Index < Parts.Size(); ++Index)
-				{
-					if (Index == OriginalIndex)
+					if (InDeclarator)
 					{
-						continue;
+						AppendTokenText(Using.Type.Declarator, Token);
 					}
-					const auto& Part = Parts[Index];
-					size_t NameAt = FindDeclaratorName(Part.first, Part.second);
-					if (NameAt == Part.second)
+					else if (Token.Type == ETextTokenType::Identifier)
 					{
-						continue;
+						if (PendingSegment.Size() > 0) AddNameSegment(Using.Type.Name, PendingSegment);
+						PendingSegment = Token.Value_Text;
 					}
-					ParsedUsing Using;
-					Using.Kind = ParsedUsing::EKind::Typedef;
-					Using.Type.Name = OriginalName;
-					Parse_Name(NameAt, NameAt + 1, Using.Name);
-					size_t DeclaratorBegin = Part.first == Begin ? BaseEnd : Part.first;
-					String Declarator = BuildDeclarator(DeclaratorBegin, Part.second, NameAt);
-					if (Declarator != TEXT("$"))
+					else if (Token.Value_Text == TEXT("::"))
 					{
-						Using.Type.Declarator = std::move(Declarator);
-					}
-					OnParsed_Using(Using);
-				}
-				return;
-			}
-		}
-		for (const auto& Part : Parts)
-		{
-			size_t NameAt = FindDeclaratorName(Part.first, Part.second);
-			if (NameAt == Part.second)
-			{
-				continue;
-			}
-			ParsedUsing Using;
-			if (Part.first == Begin)
-			{
-				Using.Attributes = std::move(m_PendingAttributes);
-			}
-			Using.Kind = ParsedUsing::EKind::Typedef;
-			Parse_Name(NameAt, NameAt + 1, Using.Name);
-			Using.Type = BaseType;
-			size_t DeclaratorBegin = Part.first == Begin ? BaseEnd : Part.first;
-			String Declarator = BuildDeclarator(DeclaratorBegin, Part.second, NameAt);
-			if (InlineDefinition.Size() > 0)
-			{
-				Declarator = InlineDefinition + TEXT(" ") + Declarator;
-			}
-			if (Declarator != TEXT("$"))
-			{
-				Using.Type.Declarator = std::move(Declarator);
-			}
-			OnParsed_Using(Using);
-		}
-	}
-
-	void CppParser::Parse_Template()
-	{
-		TakeToken();
-		ExpectToken(TEXT("<"));
-		size_t Begin = m_TokenAt;
-		int32 Depth = 1;
-		while (HasToken() && Depth > 0)
-		{
-			if (IsToken(TEXT("<"))) ++Depth;
-			else if (IsToken(TEXT(">")) && --Depth == 0)
-			{
-				break;
-			}
-			else if (IsToken(TEXT(">>")) && (Depth -= 2) <= 0)
-			{
-				break;
-			}
-			++m_TokenAt;
-		}
-		size_t End = m_TokenAt;
-		if (!HasToken())
-		{
-			ThrowError(TEXT("Unterminated template parameter list"));
-		}
-		++m_TokenAt;
-		ParsedTemplate Template;
-		for (const auto& Part : SplitTopLevel(Begin, End, TEXT(",")))
-		{
-			if (Part.first == Part.second)
-			{
-				continue;
-			}
-			ParsedTemplateParameter& Parameter = Template.Parameters.EmplaceRef();
-			size_t At = Part.first;
-			if (m_Tokens[At].Value_Text == TEXT("template")) Parameter.Kind = ParsedTemplateParameter::EKind::TemplateTemplate;
-			else if (m_Tokens[At].Value_Text == TEXT("typename") || m_Tokens[At].Value_Text == TEXT("class")) Parameter.Kind = ParsedTemplateParameter::EKind::Type;
-			else if (At + 1 < Part.second && (m_Tokens[At + 1].Value_Text == TEXT("typename") || m_Tokens[At + 1].Value_Text == TEXT("class")))
-			{
-				Parameter.Kind = ParsedTemplateParameter::EKind::Type;
-				Parse_Name(At, At + 1, Parameter.Constraint);
-			}
-			else if (At + 1 < Part.second && m_Tokens[At].Type == ETextTokenType::Identifier &&
-				m_Tokens[At + 1].Type == ETextTokenType::Identifier && m_Tokens[At].Value_Text.Size() > 1 && !IsBuiltinType(m_Tokens[At].Value_Text))
-			{
-				Parameter.Kind = ParsedTemplateParameter::EKind::Type;
-				Parse_Name(At, At + 1, Parameter.Constraint);
-			}
-			else Parameter.Kind = ParsedTemplateParameter::EKind::NonType;
-			size_t Equal = FindTopLevel(At, Part.second, TEXT("="));
-			size_t NameAt = Equal < Part.second ? Equal : Part.second;
-			while (NameAt > At && m_Tokens[NameAt - 1].Type != ETextTokenType::Identifier) --NameAt;
-			if (NameAt > At)
-			{
-				--NameAt;
-				Parameter.Name = m_Tokens[NameAt].Value_Text;
-				if (Parameter.Kind == ParsedTemplateParameter::EKind::TemplateTemplate)
-				{
-					Parameter.TemplatePrefix = TokensToText(At, NameAt);
-				}
-				if (NameAt > At && m_Tokens[NameAt - 1].Value_Text == TEXT("...")) Parameter.IsVariadic = true;
-				else if (NameAt >= At + 3 && m_Tokens[NameAt - 1].Value_Text == TEXT(".") && m_Tokens[NameAt - 2].Value_Text == TEXT(".") && m_Tokens[NameAt - 3].Value_Text == TEXT(".")) Parameter.IsVariadic = true;
-				if (Parameter.Kind == ParsedTemplateParameter::EKind::NonType)
-				{
-					Parse_Type(At, NameAt, Parameter.Type);
-				}
-			}
-			if (Equal < Part.second)
-			{
-				Parameter.HasDefault = true;
-				if (Parameter.Kind == ParsedTemplateParameter::EKind::NonType) Parameter.DefaultExpression.Text = TokensToText(Equal + 1, Part.second);
-				else
-				{
-					Parse_Type(Equal + 1, Part.second, Parameter.DefaultType);
-				}
-			}
-		}
-		if (ConsumeToken(TEXT("requires")))
-		{
-			Template.HasRequires = true;
-			size_t RequiresBegin = m_TokenAt;
-			while (HasToken() && !IsToken(TEXT("class")) && !IsToken(TEXT("struct")) && !IsToken(TEXT("union")) && !IsToken(TEXT("concept"))) ++m_TokenAt;
-			Template.RequiresClause.Text = TokensToText(RequiresBegin, m_TokenAt);
-		}
-		OnParsed_Template(Template);
-		Parse_Declaration();
-	}
-
-	void CppParser::Parse_Concept()
-	{
-		TakeToken();
-		ParsedConcept Concept;
-		Concept.Attributes = std::move(m_PendingAttributes);
-		Parse_Attributes(Concept.Attributes);
-		if (!HasToken() || PeekToken().Type != ETextTokenType::Identifier)
-		{
-			ThrowError(TEXT("Expected concept name"));
-		}
-		Parse_Name(m_TokenAt, m_TokenAt + 1, Concept.Name);
-		++m_TokenAt;
-		ExpectToken(TEXT("="));
-		size_t Begin = m_TokenAt;
-		m_TokenAt = FindTopLevel(Begin, m_Tokens.Size(), TEXT(";"));
-		Concept.Constraint.Text = TokensToText(Begin, m_TokenAt);
-		ExpectToken(TEXT(";"));
-		OnParsed_Concept(Concept);
-	}
-
-	void CppParser::Parse_StaticAssert()
-	{
-		TakeToken();
-		ExpectToken(TEXT("("));
-		size_t Close = FindMatching(m_TokenAt - 1, TEXT("("), TEXT(")"));
-		size_t Comma = FindTopLevel(m_TokenAt, Close, TEXT(","));
-		ParsedStaticAssert Assert;
-		Assert.Condition.Text = TokensToText(m_TokenAt, Comma);
-		if (Comma < Close)
-		{
-			Assert.HasMessage = true;
-			Assert.Message.Text = TokensToText(Comma + 1, Close);
-		}
-		m_TokenAt = Close + 1;
-		ExpectToken(TEXT(";"));
-		OnParsed_StaticAssert(Assert);
-	}
-
-	void CppParser::Parse_Linkage()
-	{
-		TakeToken();
-		TextToken Language = TakeToken();
-		ParsedLinkage Linkage;
-		Linkage.Language = Language.Value_Text;
-		Linkage.HasBody = ConsumeToken(TEXT("{"));
-		OnParsed_Linkage(Linkage);
-		if (Linkage.HasBody)
-		{
-			m_Scopes.Add({ EScopeType::Linkage, {}, EParsedElaboratedType::None });
-		}
-		else
-		{
-			Parse_Declaration();
-		}
-	}
-
-	void CppParser::Parse_General()
-	{
-		const size_t Begin = m_TokenAt;
-		int32 Parens = 0;
-		int32 Brackets = 0;
-		int32 Braces = 0;
-		bool FunctionBody = false;
-		while (HasToken())
-		{
-			const String& Value = PeekToken().Value_Text;
-			if (Value == TEXT(";") && Parens == 0 && Brackets == 0 && Braces == 0)
-			{
-				break;
-			}
-			if (Value == TEXT("}") && Parens == 0 && Brackets == 0 && Braces == 0)
-			{
-				break;
-			}
-			if (Value == TEXT("(")) ++Parens;
-			else if (Value == TEXT(")")) --Parens;
-			else if (Value == TEXT("[") || Value == TEXT("[[")) ++Brackets;
-			else if (Value == TEXT("]") || Value == TEXT("]]")) --Brackets;
-			else if (Value == TEXT("{") && Parens == 0 && Brackets == 0 && Braces == 0)
-			{
-				bool HasFunctionParen = FindTopLevel(Begin, m_TokenAt, TEXT("(")) < m_TokenAt;
-				bool IsRequiresExpression = false;
-				for (size_t At = Begin; At < m_TokenAt; ++At)
-				{
-					if (m_Tokens[At].Value_Text == TEXT("requires") && At + 1 < m_TokenAt && m_Tokens[At + 1].Value_Text == TEXT("("))
-					{
-						IsRequiresExpression = true;
-					}
-				}
-				if (HasFunctionParen && !IsRequiresExpression)
-				{
-					FunctionBody = true;
-					size_t Close = FindMatching(m_TokenAt, TEXT("{"), TEXT("}"));
-					m_TokenAt = Close + 1;
-					while (IsToken(TEXT("catch")))
-					{
-						++m_TokenAt;
-						if (IsToken(TEXT("(")))
+						if (PendingSegment.Size() > 0)
 						{
-							m_TokenAt = FindMatching(m_TokenAt, TEXT("("), TEXT(")")) + 1;
-						}
-						if (IsToken(TEXT("{")))
-						{
-							m_TokenAt = FindMatching(m_TokenAt, TEXT("{"), TEXT("}")) + 1;
+							AddNameSegment(Using.Type.Name, PendingSegment);
+							PendingSegment.Clear();
 						}
 					}
-					break;
-				}
-				++Braces;
-			}
-			else if (Value == TEXT("{") && Braces > 0)
-			{
-				++Braces;
-			}
-			else if (Value == TEXT("}") && Braces > 0) --Braces;
-			++m_TokenAt;
-		}
-		const size_t End = m_TokenAt;
-		if (End == Begin)
-		{
-			ThrowError(TEXT("Unexpected token '") + PeekToken().Value_Text + TEXT("'"));
-		}
-		ConsumeToken(TEXT(";"));
-
-		EParsedVariableFlags VariableFlags = EParsedVariableFlags::None;
-		EParsedFunctionFlags FunctionFlags = EParsedFunctionFlags::None;
-		for (size_t At = Begin; At < End; ++At)
-		{
-			const String& Value = m_Tokens[At].Value_Text;
-			if (Value == TEXT("static"))
-			{
-				AddFlag(VariableFlags, EParsedVariableFlags::IsStatic);
-				AddFlag(FunctionFlags, EParsedFunctionFlags::IsStatic);
-			}
-			else if (Value == TEXT("thread_local"))
-			{
-				AddFlag(VariableFlags, EParsedVariableFlags::IsThreadLocal);
-			}
-			else if (Value == TEXT("extern"))
-			{
-				AddFlag(VariableFlags, EParsedVariableFlags::IsExtern);
-			}
-			else if (Value == TEXT("mutable"))
-			{
-				AddFlag(VariableFlags, EParsedVariableFlags::IsMutable);
-			}
-			else if (Value == TEXT("constexpr"))
-			{
-				AddFlag(VariableFlags, EParsedVariableFlags::IsConstexpr);
-				AddFlag(FunctionFlags, EParsedFunctionFlags::IsConstexpr);
-			}
-			else if (Value == TEXT("consteval"))
-			{
-				AddFlag(VariableFlags, EParsedVariableFlags::IsConsteval);
-				AddFlag(FunctionFlags, EParsedFunctionFlags::IsConsteval);
-			}
-			else if (Value == TEXT("inline"))
-			{
-				AddFlag(VariableFlags, EParsedVariableFlags::IsInline);
-				AddFlag(FunctionFlags, EParsedFunctionFlags::IsInline);
-			}
-			else if (Value == TEXT("virtual"))
-			{
-				AddFlag(FunctionFlags, EParsedFunctionFlags::IsVirtual);
-			}
-			else if (Value == TEXT("explicit"))
-			{
-				AddFlag(FunctionFlags, EParsedFunctionFlags::IsExplicit);
-			}
-		}
-
-		size_t NameAt = FindDeclaratorName(Begin, End);
-		size_t OperatorAt = End;
-		for (size_t At = Begin; At < End; ++At)
-		{
-			if (m_Tokens[At].Value_Text == TEXT("operator"))
-			{
-				OperatorAt = At;
-				break;
-			}
-		}
-		bool IsOperator = OperatorAt < End;
-		size_t Open = End;
-		if (IsOperator)
-		{
-			for (size_t At = OperatorAt + 1; At < End; ++At)
-			{
-				if (m_Tokens[At].Value_Text == TEXT("("))
-				{
-					if (At + 1 < End && m_Tokens[At + 1].Value_Text == TEXT(")") && At + 2 < End && m_Tokens[At + 2].Value_Text == TEXT("("))
+					else if (Token.Value_Text == TEXT("<"))
 					{
-						Open = At + 2;
+						if (PendingSegment.Size() > 0)
+						{
+							AddNameSegment(Using.Type.Name, PendingSegment);
+							PendingSegment.Clear();
+						}
+						String TemplateText;
+						SkipBalanced(TEXT("<"), TEXT(">"), Token, HasToken, &TemplateText);
+						if (Using.Type.Name.Segments.Size() > 0)
+						{
+							ParsedTemplateArgument& Argument = Using.Type.Name.Segments[Using.Type.Name.Segments.Size() - 1].TemplateArguments.EmplaceRef();
+							AddNameSegment(Argument.Type.Name, TemplateText.SubString(1, TemplateText.Size() > 1 ? TemplateText.Size() - 2 : 0));
+						}
+						continue;
 					}
 					else
 					{
-						Open = At;
+						if (PendingSegment.Size() > 0)
+						{
+							AddNameSegment(Using.Type.Name, PendingSegment);
+							PendingSegment.Clear();
+						}
+						InDeclarator = true;
+						AppendTokenText(Using.Type.Declarator, Token);
 					}
-					break;
+					Advance(Token, HasToken);
 				}
+				if (PendingSegment.Size() > 0) AddNameSegment(Using.Type.Name, PendingSegment);
+				Expect(TEXT(";"), Token, HasToken);
+				OnParsed_Using(Using);
+				return;
 			}
-		}
-		else if (NameAt < End && NameAt + 1 < End && m_Tokens[NameAt + 1].Value_Text == TEXT("("))
-		{
-			Open = NameAt + 1;
-		}
-		if (Open < End)
-		{
-			size_t Close = FindMatching(Open, TEXT("("), TEXT(")"));
-			if (NameAt == End && !IsOperator)
+			AddNameSegment(Using.Target, First);
+			while (HasToken && Token.Value_Text != TEXT(";"))
 			{
-				ThrowError(TEXT("Expected function name"));
+				if (Token.Type == ETextTokenType::Identifier) AddNameSegment(Using.Target, Token.Value_Text);
+				Advance(Token, HasToken);
 			}
-			bool IsDestructor = !IsOperator && NameAt > Begin && (m_Tokens[NameAt - 1].Value_Text == TEXT("~") || m_Tokens[NameAt - 1].Value_Text == TEXT("compl"));
-			const String ClassName = CurrentClassName();
-			bool IsConstructor = !IsOperator && !IsDestructor && ClassName.Size() > 0 && m_Tokens[NameAt].Value_Text == ClassName;
-			ParsedFunction Function;
-			Function.Attributes = std::move(m_PendingAttributes);
-			Function.Flags = FunctionFlags;
-			for (size_t At = Begin; At < NameAt; ++At)
-			{
-				if (m_Tokens[At].Value_Text == TEXT("explicit") && At + 1 < NameAt && m_Tokens[At + 1].Value_Text == TEXT("("))
-				{
-					size_t ExplicitEnd = FindMatching(At + 1, TEXT("("), TEXT(")"));
-					Function.HasExplicitExpression = true;
-					Function.ExplicitExpression.Text = TokensToText(At + 2, ExplicitEnd);
-				}
-			}
-			if (FunctionBody)
-			{
-				AddFlag(Function.Flags, EParsedFunctionFlags::HasBody);
-			}
-			Parse_Name(NameAt, NameAt + 1, Function.Name);
-			Parse_Parameters(Open + 1, Close, Function.Parameters);
-			if (!IsConstructor && !IsDestructor)
-			{
-				Parse_Type(Begin, IsOperator ? OperatorAt : NameAt, Function.ReturnType);
-			}
-			bool IsTrailing = false;
-			Parse_FunctionTail(Close + 1, End, Function, &Function.ReturnType, IsTrailing);
-			Function.IsTrailingType = IsTrailing;
-			if (FunctionBody)
-			{
-				size_t BodyOpen = FindTopLevel(Close + 1, End, TEXT("{"));
-				if (BodyOpen < End)
-				{
-					Function.Body.Text = TokensToText(BodyOpen, End);
-				}
-			}
-			if (IsOperator)
-			{
-				ParsedOperator Operator;
-				static_cast<ParsedFunction&>(Operator) = std::move(Function);
-				Operator.Symbol = TokensToText(OperatorAt + 1, Open);
-				OnParsed_Operator(Operator);
-			}
-			else if (IsConstructor)
-			{
-				ParsedConstructor Constructor;
-				static_cast<ParsedFunctionBase&>(Constructor) = std::move(static_cast<ParsedFunctionBase&>(Function));
-				OnParsed_Constructor(Constructor);
-			}
-			else if (IsDestructor)
-			{
-				ParsedDestructor Destructor;
-				static_cast<ParsedFunctionBase&>(Destructor) = std::move(static_cast<ParsedFunctionBase&>(Function));
-				OnParsed_Destructor(Destructor);
-			}
-			else OnParsed_Function(Function);
+			Expect(TEXT(";"), Token, HasToken);
+			OnParsed_Using(Using);
 			return;
 		}
 
-		auto Parts = SplitTopLevel(Begin, End, TEXT(","));
-		size_t BaseEnd = End;
-		if (Parts.Size() > 0)
+		ParsedType Type;
+		String Candidate;
+		bool InDeclarator = false;
+		bool HasDeclaratorName = false;
+		while (HasToken && Token.Value_Text != TEXT(";"))
 		{
-			size_t NameAt = FindDeclaratorName(Parts[0].first, Parts[0].second);
-			if (NameAt < Parts[0].second)
+			if (InDeclarator)
 			{
-				BaseEnd = FindDeclaratorTypeEnd(Begin, NameAt);
+				if (!HasDeclaratorName && Token.Type == ETextTokenType::Identifier)
+				{
+					Candidate = Token.Value_Text;
+					Type.Declarator += TEXT("$");
+					HasDeclaratorName = true;
+				}
+				else AppendTokenText(Type.Declarator, Token);
 			}
-		}
-		ParsedType BaseType;
-		Parse_Type(Begin, BaseEnd, BaseType);
-		for (size_t Index = 0; Index < Parts.Size(); ++Index)
-		{
-			size_t PartBegin = Parts[Index].first;
-			size_t PartEnd = Parts[Index].second;
-			size_t NameAt = FindDeclaratorName(PartBegin, PartEnd);
-			if (NameAt == PartEnd)
+			else if (Token.Type == ETextTokenType::Identifier)
 			{
-				continue;
+				if (Type.Name.Segments.Size() == 0) AddNameSegment(Type.Name, Token.Value_Text);
+				else if (Candidate.Size() == 0) Candidate = Token.Value_Text;
+				else
+				{
+					AddNameSegment(Type.Name, Candidate);
+					Candidate = Token.Value_Text;
+				}
 			}
-			Parse_Variable(PartBegin, PartEnd, NameAt, BaseType, VariableFlags);
+			else if (Token.Value_Text != TEXT("::"))
+			{
+				if (Candidate.Size() > 0)
+				{
+					AddNameSegment(Type.Name, Candidate);
+					Candidate.Clear();
+				}
+				InDeclarator = true;
+				AppendTokenText(Type.Declarator, Token);
+			}
+			Advance(Token, HasToken);
 		}
+		Expect(TEXT(";"), Token, HasToken);
+		if (Candidate.Size() > 0) AddNameSegment(Using.Name, Candidate);
+		Using.Type = std::move(Type);
+		OnParsed_Using(Using);
 	}
 
-	void CppParser::Parse_ClosedClassDeclarators(const Scope& ClosedScope)
+	void CppParser::ParseTemplate(TextToken& Token, bool& HasToken)
 	{
-		size_t Begin = m_TokenAt;
-		m_TokenAt = FindTopLevel(Begin, m_Tokens.Size(), TEXT(";"));
-		size_t End = m_TokenAt;
-		ExpectToken(TEXT(";"));
-		ParsedType Type = ClosedScope.DeclaredType;
-		if (ClosedScope.Name.Size() > 0)
+		Advance(Token, HasToken);
+		Expect(TEXT("<"), Token, HasToken);
+		ParsedTemplate Template;
+		while (HasToken && Token.Value_Text != TEXT(">") && Token.Value_Text != TEXT(">>"))
 		{
-			Type.ElaboratedType = EParsedElaboratedType::None;
-			Type.Name.Segments.EmplaceRef().Name = ClosedScope.Name;
-		}
-		else
-		{
-			Type.ElaboratedType = ClosedScope.ElaboratedType;
-		}
-		for (const auto& Part : SplitTopLevel(Begin, End, TEXT(",")))
-		{
-			size_t NameAt = FindDeclaratorName(Part.first, Part.second);
-			if (NameAt < Part.second)
+			ParsedTemplateParameter& Parameter = Template.Parameters.EmplaceRef();
+			if (Token.Value_Text == TEXT("template"))
 			{
-				Parse_Variable(Part.first, Part.second, NameAt, Type, ClosedScope.VariableFlags);
-			}
-		}
-	}
-
-	void CppParser::Parse_Parameters(size_t Begin, size_t End, Array<ParsedFunctionParameter>& Parameters)
-	{
-		if (Begin == End || (End == Begin + 1 && m_Tokens[Begin].Value_Text == TEXT("void"))) return;
-		for (const auto& Part : SplitTopLevel(Begin, End, TEXT(",")))
-		{
-			ParsedFunctionParameter& Parameter = Parameters.EmplaceRef();
-			if (TokensToText(Part.first, Part.second) == TEXT("..."))
-			{
-				Parameter.IsVariadic = true;
+				Parameter.Kind = ParsedTemplateParameter::EKind::TemplateTemplate;
+				Parameter.TemplatePrefix = TEXT("template");
+				Advance(Token, HasToken);
+				if (HasToken && Token.Value_Text == TEXT("<")) SkipBalanced(TEXT("<"), TEXT(">"), Token, HasToken, &Parameter.TemplatePrefix);
+				if (HasToken && (Token.Value_Text == TEXT("class") || Token.Value_Text == TEXT("typename")))
+				{
+					Parameter.TemplatePrefix += TEXT(" ") + Token.Value_Text;
+					Advance(Token, HasToken);
+				}
+				if (HasToken && Token.Type == ETextTokenType::Identifier)
+				{
+					Parameter.Name = Token.Value_Text;
+					Advance(Token, HasToken);
+				}
+				if (HasToken && Token.Value_Text == TEXT("="))
+				{
+					Parameter.HasDefault = true;
+					Advance(Token, HasToken);
+					String Default;
+					ReadExpressionUntil(Default, TEXT(","), TEXT(">"), Token, HasToken);
+					AddNameSegment(Parameter.DefaultType.Name, Default);
+				}
+				if (HasToken && Token.Value_Text == TEXT(",")) Advance(Token, HasToken);
 				continue;
 			}
-			size_t Equal = FindTopLevel(Part.first, Part.second, TEXT("="));
-			if (Equal < Part.second)
+
+			Parameter.Kind = Token.Value_Text == TEXT("typename") || Token.Value_Text == TEXT("class") ?
+				ParsedTemplateParameter::EKind::Type : ParsedTemplateParameter::EKind::NonType;
+			if (Parameter.Kind == ParsedTemplateParameter::EKind::Type) Advance(Token, HasToken);
+			String LastIdentifier;
+			while (HasToken && Token.Value_Text != TEXT(",") && Token.Value_Text != TEXT(">") && Token.Value_Text != TEXT(">>"))
 			{
-				Parameter.HasDefaultValue = true;
-				Parameter.DefaultValue.Text = TokensToText(Equal + 1, Part.second);
+				if (Token.Value_Text == TEXT("="))
+				{
+					Parameter.HasDefault = true;
+					Advance(Token, HasToken);
+					String Default;
+					ReadExpressionUntil(Default, TEXT(","), TEXT(">"), Token, HasToken);
+					if (Parameter.Kind == ParsedTemplateParameter::EKind::NonType) Parameter.DefaultExpression.Text = std::move(Default);
+					else AddNameSegment(Parameter.DefaultType.Name, Default);
+					break;
+				}
+				if (Token.Value_Text == TEXT("...") || Token.Value_Text == TEXT("."))
+				{
+					Parameter.IsVariadic = ConsumeEllipsis(Token, HasToken);
+					continue;
+				}
+				else if (Token.Type == ETextTokenType::Identifier)
+				{
+					if (LastIdentifier.Size() > 0 && Parameter.Kind == ParsedTemplateParameter::EKind::NonType) AddNameSegment(Parameter.Type.Name, LastIdentifier);
+					LastIdentifier = Token.Value_Text;
+				}
+				Advance(Token, HasToken);
 			}
-			size_t NameAt = FindDeclaratorName(Part.first, Equal);
-			if (NameAt < Equal)
+			Parameter.Name = LastIdentifier;
+			if (Parameter.Kind == ParsedTemplateParameter::EKind::NonType && Parameter.Type.Name.Segments.Size() == 1 &&
+				Parameter.Type.Name.Segments[0].Name.Size() > 1 && !IsBuiltinType(Parameter.Type.Name.Segments[0].Name))
 			{
-				bool IsName = false;
-				for (size_t At = Part.first; At < NameAt; ++At)
+				Parameter.Kind = ParsedTemplateParameter::EKind::Type;
+				Parameter.Constraint = std::move(Parameter.Type.Name);
+				Parameter.Type = {};
+			}
+			if (HasToken && Token.Value_Text == TEXT(",")) Advance(Token, HasToken);
+		}
+		if (HasToken) Advance(Token, HasToken);
+		if (HasToken && Token.Value_Text == TEXT("requires"))
+		{
+			Template.HasRequires = true;
+			Advance(Token, HasToken);
+			while (HasToken && Token.Value_Text != TEXT("class") && Token.Value_Text != TEXT("struct") && Token.Value_Text != TEXT("union") && Token.Value_Text != TEXT("concept"))
+			{
+				AppendTokenText(Template.RequiresClause.Text, Token);
+				Advance(Token, HasToken);
+			}
+		}
+		OnParsed_Template(Template);
+		ParseDeclaration(Token, HasToken);
+	}
+
+	void CppParser::ParseConcept(TextToken& Token, bool& HasToken)
+	{
+		Advance(Token, HasToken);
+		ParsedConcept Concept;
+		Concept.Attributes = std::move(m_PendingAttributes);
+		ParseAttributes(Concept.Attributes, Token, HasToken);
+		if (!HasToken || Token.Type != ETextTokenType::Identifier) ThrowError(TEXT("Expected concept name"), Token, HasToken);
+		AddNameSegment(Concept.Name, Token.Value_Text);
+		Advance(Token, HasToken);
+		Expect(TEXT("="), Token, HasToken);
+		ReadExpressionUntil(Concept.Constraint.Text, TEXT(";"), {}, Token, HasToken);
+		Expect(TEXT(";"), Token, HasToken);
+		OnParsed_Concept(Concept);
+	}
+
+	void CppParser::ParseStaticAssert(TextToken& Token, bool& HasToken)
+	{
+		Advance(Token, HasToken);
+		Expect(TEXT("("), Token, HasToken);
+		ParsedStaticAssert Assert;
+		ReadExpressionUntil(Assert.Condition.Text, TEXT(","), TEXT(")"), Token, HasToken);
+		if (HasToken && Token.Value_Text == TEXT(","))
+		{
+			Assert.HasMessage = true;
+			Advance(Token, HasToken);
+			ReadExpressionUntil(Assert.Message.Text, TEXT(")"), {}, Token, HasToken);
+		}
+		Expect(TEXT(")"), Token, HasToken);
+		Expect(TEXT(";"), Token, HasToken);
+		OnParsed_StaticAssert(Assert);
+	}
+
+	void CppParser::ParseLinkage(TextToken& Token, bool& HasToken)
+	{
+		ParsedLinkage Linkage;
+		Linkage.Language = Token.Value_Text;
+		Advance(Token, HasToken);
+		if (HasToken && Token.Value_Text == TEXT("{"))
+		{
+			Linkage.HasBody = true;
+			Advance(Token, HasToken);
+		}
+		OnParsed_Linkage(Linkage);
+		if (Linkage.HasBody) m_Scopes.Add({ EScopeType::Linkage });
+		else ParseDeclaration(Token, HasToken);
+	}
+
+	void CppParser::ParseGeneral(TextToken& Token, bool& HasToken, ParsedType Type, EParsedVariableFlags VariableFlags)
+	{
+		Array<ParsedAttribute> Attributes = std::move(m_PendingAttributes);
+		EParsedFunctionFlags FunctionFlags = EParsedFunctionFlags::None;
+		if ((static_cast<uint16>(VariableFlags) & static_cast<uint16>(EParsedVariableFlags::IsInline)) != 0)
+			AddFlag(FunctionFlags, EParsedFunctionFlags::IsInline);
+		if ((static_cast<uint16>(VariableFlags) & static_cast<uint16>(EParsedVariableFlags::IsStatic)) != 0)
+			AddFlag(FunctionFlags, EParsedFunctionFlags::IsStatic);
+		String Candidate;
+		String ExplicitExpression;
+		bool IsDestructor = false;
+		bool HasDeclaratorIndirection = false;
+		bool IsComplexDeclarator = false;
+		bool DeclaratorHasName = false;
+		int32 ComplexDeclaratorDepth = 0;
+		bool TypeIsComplete = Type.ElaboratedType != EParsedElaboratedType::None ||
+			(static_cast<uint8>(Type.Flags) & static_cast<uint8>(EParsedTypeFlags::IsDecltype)) != 0;
+		ParsedType BaseType = Type;
+		auto AppendDeclaratorName = [&]()
+			{
+				if (IsComplexDeclarator && !DeclaratorHasName && Candidate.Size() > 0)
 				{
-					if (m_Tokens[At].Type == ETextTokenType::Identifier && !IsTypeQualifier(m_Tokens[At].Value_Text) &&
-						!IsDeclarationSpecifier(m_Tokens[At].Value_Text) && m_Tokens[At].Value_Text != TEXT("typename"))
+					Type.Declarator += TEXT("$");
+					DeclaratorHasName = true;
+				}
+			};
+
+		auto EmitVariable = [&](const String& Name, ParsedType VariableType, String Initializer, bool IsBitfield)
+			{
+				if (Name.Size() == 0) return;
+				ParsedVariable Variable;
+				Variable.Type = std::move(VariableType);
+				Variable.Flags = VariableFlags;
+				Variable.Attributes = std::move(Attributes);
+				AddNameSegment(Variable.Name, Name);
+				if (Initializer.Size() > 0 || IsBitfield)
+				{
+					AddFlag(Variable.Flags, EParsedVariableFlags::HasInitializer);
+					if (IsBitfield) AddFlag(Variable.Flags, EParsedVariableFlags::IsBitfield);
+					Variable.Initializer.Text = std::move(Initializer);
+				}
+				OnParsed_Variable(Variable);
+			};
+
+		while (HasToken)
+		{
+			const String Value = Token.Value_Text;
+			if (Value == TEXT("}"))
+			{
+				if (Candidate.Size() > 0) EmitVariable(Candidate, Type, {}, false);
+				return;
+			}
+			if (IsDeclarationSpecifier(Value))
+			{
+				if (Value == TEXT("static"))
+				{
+					AddFlag(VariableFlags, EParsedVariableFlags::IsStatic);
+					AddFlag(FunctionFlags, EParsedFunctionFlags::IsStatic);
+				}
+				else if (Value == TEXT("thread_local")) AddFlag(VariableFlags, EParsedVariableFlags::IsThreadLocal);
+				else if (Value == TEXT("extern")) AddFlag(VariableFlags, EParsedVariableFlags::IsExtern);
+				else if (Value == TEXT("mutable")) AddFlag(VariableFlags, EParsedVariableFlags::IsMutable);
+				else if (Value == TEXT("constexpr"))
+				{
+					AddFlag(VariableFlags, EParsedVariableFlags::IsConstexpr);
+					AddFlag(FunctionFlags, EParsedFunctionFlags::IsConstexpr);
+				}
+				else if (Value == TEXT("consteval"))
+				{
+					AddFlag(VariableFlags, EParsedVariableFlags::IsConsteval);
+					AddFlag(FunctionFlags, EParsedFunctionFlags::IsConsteval);
+				}
+				else if (Value == TEXT("inline"))
+				{
+					AddFlag(VariableFlags, EParsedVariableFlags::IsInline);
+					AddFlag(FunctionFlags, EParsedFunctionFlags::IsInline);
+				}
+				else if (Value == TEXT("virtual")) AddFlag(FunctionFlags, EParsedFunctionFlags::IsVirtual);
+				else if (Value == TEXT("explicit")) AddFlag(FunctionFlags, EParsedFunctionFlags::IsExplicit);
+				Advance(Token, HasToken);
+				if (Value == TEXT("explicit") && HasToken && Token.Value_Text == TEXT("("))
+				{
+					Advance(Token, HasToken);
+					ReadExpressionUntil(ExplicitExpression, TEXT(")"), {}, Token, HasToken);
+					Expect(TEXT(")"), Token, HasToken);
+				}
+				continue;
+			}
+			if (IsTypeQualifier(Value))
+			{
+				if (Type.Indirections.Size() > 0 && (Value == TEXT("const") || Value == TEXT("volatile") || Value == TEXT("mutable")))
+				{
+					ParsedIndirection& Indirection = Type.Indirections[Type.Indirections.Size() - 1];
+					if (Value == TEXT("const")) Indirection.IsConst = true;
+					else if (Value == TEXT("volatile")) Indirection.IsVolatile = true;
+					else Indirection.IsMutable = true;
+				}
+				else if (Value == TEXT("const")) AddFlag(Type.Flags, EParsedTypeFlags::IsConst);
+				else if (Value == TEXT("volatile")) AddFlag(Type.Flags, EParsedTypeFlags::IsVolatile);
+				else if (Value == TEXT("mutable")) AddFlag(Type.Flags, EParsedTypeFlags::IsMutable);
+				else if (Value == TEXT("unsigned")) AddFlag(Type.Flags, EParsedTypeFlags::IsUnsigned);
+				else if (Value == TEXT("signed")) AddFlag(Type.Flags, EParsedTypeFlags::IsSigned);
+				Advance(Token, HasToken);
+				continue;
+			}
+			if (Value == TEXT("typename"))
+			{
+				Type.IsTypename = true;
+				Advance(Token, HasToken);
+				continue;
+			}
+			if (Value == TEXT("class") || Value == TEXT("struct") || Value == TEXT("union") || Value == TEXT("enum"))
+			{
+				m_PendingAttributes = std::move(Attributes);
+				m_PendingDeclaredType = Type;
+				m_PendingVariableFlags = VariableFlags;
+				Advance(Token, HasToken);
+				if (Value == TEXT("enum")) ParseEnum(Token, HasToken);
+				else ParseClass(Value == TEXT("class") ? EClassType::Class : Value == TEXT("struct") ? EClassType::Struct : EClassType::Union, false, Token, HasToken);
+				return;
+			}
+			if (Value == TEXT("decltype"))
+			{
+				AddFlag(Type.Flags, EParsedTypeFlags::IsDecltype);
+				TypeIsComplete = true;
+				Advance(Token, HasToken);
+				if (HasToken && Token.Value_Text == TEXT("("))
+				{
+					Advance(Token, HasToken);
+					ReadExpressionUntil(Type.Decltype.Text, TEXT(")"), {}, Token, HasToken);
+					Expect(TEXT(")"), Token, HasToken);
+				}
+				continue;
+			}
+			if (Value == TEXT("~") || Value == TEXT("compl"))
+			{
+				IsDestructor = true;
+				Advance(Token, HasToken);
+				continue;
+			}
+			if (Value == TEXT("operator"))
+			{
+				Advance(Token, HasToken);
+				String Symbol;
+				if (HasToken && Token.Value_Text == TEXT("("))
+				{
+					Symbol = TEXT("(");
+					Advance(Token, HasToken);
+					if (HasToken && Token.Value_Text == TEXT(")"))
 					{
-						IsName = true;
-						break;
+						Symbol += TEXT(")");
+						Advance(Token, HasToken);
 					}
 				}
-				if (NameAt + 1 < Equal && m_Tokens[NameAt + 1].Value_Text == TEXT("<"))
+				while (HasToken && Token.Value_Text != TEXT("("))
 				{
-					IsName = false;
+					AppendTokenText(Symbol, Token);
+					Advance(Token, HasToken);
 				}
-				if (NameAt > Part.first && m_Tokens[NameAt - 1].Value_Text == TEXT("::") && NameAt + 1 == Equal)
+				ParseFunction(std::move(Type), TEXT("operator"), false, true, Symbol, FunctionFlags, Attributes, ExplicitExpression, Token, HasToken);
+				return;
+			}
+			if (IsComplexDeclarator && DeclaratorHasName)
+			{
+				if (Value == TEXT("(") && ComplexDeclaratorDepth == 0 && Type.Declarator == TEXT("($)"))
 				{
-					IsName = false;
+					Type.Declarator.Clear();
+					ParseFunction(std::move(Type), Candidate, IsDestructor, false, {}, FunctionFlags, Attributes, ExplicitExpression, Token, HasToken);
+					return;
 				}
-				for (size_t At = NameAt + 1; At < Equal; ++At)
+				const bool IsTopLevelTerminator = ComplexDeclaratorDepth == 0 &&
+					(Value == TEXT("=") || Value == TEXT(":") || Value == TEXT(",") || Value == TEXT(";"));
+				if (!IsTopLevelTerminator)
 				{
-					if (m_Tokens[At].Value_Text == TEXT("*") || m_Tokens[At].Value_Text == TEXT("&") || m_Tokens[At].Value_Text == TEXT("&&"))
-					{
-						IsName = false;
-						break;
-					}
+					if (Value == TEXT("(")) ++ComplexDeclaratorDepth;
+					else if (Value == TEXT(")") && ComplexDeclaratorDepth > 0) --ComplexDeclaratorDepth;
+					AppendTokenText(Type.Declarator, Token);
+					Advance(Token, HasToken);
+					continue;
 				}
-				if (IsName)
+			}
+			if (Token.Type == ETextTokenType::Identifier)
+			{
+				if (Type.Name.Segments.Size() == 0 && !TypeIsComplete)
 				{
-					Parse_Name(NameAt, NameAt + 1, Parameter.Name);
-					Parse_Type(Part.first, NameAt, Parameter.Type);
-					for (size_t At = Part.first; At < NameAt; ++At)
-					{
-						if (m_Tokens[At].Value_Text == TEXT("...") || (At + 2 < NameAt && m_Tokens[At].Value_Text == TEXT(".") && m_Tokens[At + 1].Value_Text == TEXT(".") && m_Tokens[At + 2].Value_Text == TEXT(".")))
-						{
-							Parameter.IsTypePack = true;
-							break;
-						}
-					}
+					AddNameSegment(Type.Name, Value);
+				}
+				else if (Candidate.Size() == 0)
+				{
+					if (IsBuiltinType(Value) && Type.Name.Segments.Size() == 1 && IsBuiltinType(Type.Name.Segments[0].Name))
+						Type.Name.Segments[0].Name += TEXT(" ") + Value;
+					else Candidate = Value;
 				}
 				else
 				{
-					Parse_Type(Part.first, Equal, Parameter.Type);
+					AddNameSegment(Type.Name, Candidate);
+					Candidate = Value;
 				}
+				Advance(Token, HasToken);
+				continue;
 			}
-			size_t Bracket = FindTopLevel(Part.first, Equal, TEXT("["));
-			while (Bracket < Equal)
+			if (Value == TEXT("::"))
 			{
-				size_t Close = FindMatching(Bracket, TEXT("["), TEXT("]"));
-				Parameter.Type.ArrayExtents.EmplaceRef().Text = TokensToText(Bracket + 1, Close);
-				Bracket = FindTopLevel(Close + 1, Equal, TEXT("["));
+				if (Candidate.Size() > 0)
+				{
+					AddNameSegment(Type.Name, Candidate);
+					Candidate.Clear();
+				}
+				Advance(Token, HasToken);
+				continue;
 			}
+			if (Value == TEXT("<") && Type.Name.Segments.Size() > 0)
+			{
+				if (Candidate.Size() > 0)
+				{
+					AddNameSegment(Type.Name, Candidate);
+					Candidate.Clear();
+				}
+				ParsedNameSegment& Segment = Type.Name.Segments[Type.Name.Segments.Size() - 1];
+				Advance(Token, HasToken);
+				bool Closed = false;
+				while (HasToken && !Closed)
+				{
+					ParsedTemplateArgument& Argument = Segment.TemplateArguments.EmplaceRef();
+					String ArgumentText;
+					int32 Depth = 0;
+					while (HasToken)
+					{
+						if (Token.Value_Text == TEXT(",") && Depth == 0) break;
+						if (Token.Value_Text == TEXT(">") && Depth == 0)
+						{
+							Closed = true;
+							break;
+						}
+						if (Token.Value_Text == TEXT(">>"))
+						{
+							if (Depth <= 1)
+							{
+								if (Depth == 1) ArgumentText += TEXT(">");
+								Closed = true;
+								break;
+							}
+							Depth -= 2;
+						}
+						else if (Token.Value_Text == TEXT("<")) ++Depth;
+						else if (Token.Value_Text == TEXT(">") && Depth > 0) --Depth;
+						AppendTokenText(ArgumentText, Token);
+						Advance(Token, HasToken);
+					}
+					if (ArgumentText.Size() > 0 && (ArgumentText[0] >= '0' && ArgumentText[0] <= '9'))
+					{
+						Argument.Kind = ParsedTemplateArgument::EKind::Expression;
+						Argument.Expression.Text = std::move(ArgumentText);
+					}
+					else AddNameSegment(Argument.Type.Name, ArgumentText);
+					if (HasToken && Token.Value_Text == TEXT(",")) Advance(Token, HasToken);
+					else if (Closed) Advance(Token, HasToken);
+				}
+				continue;
+			}
+			if (Value == TEXT("*") || Value == TEXT("&") || Value == TEXT("&&"))
+			{
+				if (IsComplexDeclarator)
+				{
+					AppendTokenText(Type.Declarator, Token);
+					Advance(Token, HasToken);
+					continue;
+				}
+				if (!HasDeclaratorIndirection)
+				{
+					BaseType = Type;
+					HasDeclaratorIndirection = true;
+				}
+				ParsedIndirection& Indirection = Type.Indirections.EmplaceRef();
+				Indirection.Kind = Value == TEXT("*") ? ParsedIndirection::EKind::Pointer : Value == TEXT("&") ? ParsedIndirection::EKind::LReference : ParsedIndirection::EKind::RReference;
+				Advance(Token, HasToken);
+				continue;
+			}
+			if (Value == TEXT("(") && Candidate.Size() > 0 && !IsComplexDeclarator)
+			{
+				ParseFunction(std::move(Type), Candidate, IsDestructor, false, {}, FunctionFlags, Attributes, ExplicitExpression, Token, HasToken);
+				return;
+			}
+			if (Value == TEXT("(") && Candidate.Size() == 0 && !IsComplexDeclarator && Type.Name.Segments.Size() == 1 &&
+				(static_cast<uint8>(Type.Flags) & (static_cast<uint8>(EParsedTypeFlags::IsUnsigned) | static_cast<uint8>(EParsedTypeFlags::IsSigned))) != 0)
+			{
+				String FunctionName = Type.Name.Segments[0].Name;
+				Type.Name = {};
+				ParseFunction(std::move(Type), FunctionName, IsDestructor, false, {}, FunctionFlags, Attributes, ExplicitExpression, Token, HasToken);
+				return;
+			}
+			if (Value == TEXT("(") && Candidate.Size() == 0 && !IsComplexDeclarator && Type.Name.Segments.Size() == 1 &&
+				Type.Name.Segments[0].Name == CurrentClassName())
+			{
+				String ConstructorName = Type.Name.Segments[0].Name;
+				Type = {};
+				ParseFunction(std::move(Type), ConstructorName, IsDestructor, false, {}, FunctionFlags, Attributes, ExplicitExpression, Token, HasToken);
+				return;
+			}
+			if (Value == TEXT("("))
+			{
+				AppendDeclaratorName();
+				IsComplexDeclarator = true;
+				++ComplexDeclaratorDepth;
+				AppendTokenText(Type.Declarator, Token);
+				Advance(Token, HasToken);
+				continue;
+			}
+			if (Value == TEXT(")") && IsComplexDeclarator)
+			{
+				AppendDeclaratorName();
+				if (ComplexDeclaratorDepth > 0) --ComplexDeclaratorDepth;
+				AppendTokenText(Type.Declarator, Token);
+				Advance(Token, HasToken);
+				continue;
+			}
+			if (Value == TEXT("[") && Candidate.Size() > 0)
+			{
+				if (IsComplexDeclarator)
+				{
+					AppendDeclaratorName();
+					AppendTokenText(Type.Declarator, Token);
+					Advance(Token, HasToken);
+					while (HasToken && Token.Value_Text != TEXT("]"))
+					{
+						AppendTokenText(Type.Declarator, Token);
+						Advance(Token, HasToken);
+					}
+					if (HasToken)
+					{
+						AppendTokenText(Type.Declarator, Token);
+						Advance(Token, HasToken);
+					}
+					continue;
+				}
+				Advance(Token, HasToken);
+				ParsedExpression& Extent = Type.ArrayExtents.EmplaceRef();
+				ReadExpressionUntil(Extent.Text, TEXT("]"), {}, Token, HasToken);
+				Expect(TEXT("]"), Token, HasToken);
+				continue;
+			}
+			if ((Value == TEXT("=") || Value == TEXT(":")) && Candidate.Size() > 0)
+			{
+				AppendDeclaratorName();
+				const bool IsBitfield = Value == TEXT(":");
+				Advance(Token, HasToken);
+				String Initializer;
+				ReadExpressionUntil(Initializer, TEXT(","), TEXT(";"), Token, HasToken);
+				EmitVariable(Candidate, Type, std::move(Initializer), IsBitfield);
+				Candidate.Clear();
+				if (HasToken && Token.Value_Text == TEXT(","))
+				{
+					Advance(Token, HasToken);
+					if (HasDeclaratorIndirection) Type = BaseType;
+					HasDeclaratorIndirection = false;
+					continue;
+				}
+				Expect(TEXT(";"), Token, HasToken);
+				return;
+			}
+			if (Value == TEXT(",") && Candidate.Size() > 0)
+			{
+				AppendDeclaratorName();
+				EmitVariable(Candidate, Type, {}, false);
+				Candidate.Clear();
+				if (HasDeclaratorIndirection) Type = BaseType;
+				HasDeclaratorIndirection = false;
+				IsComplexDeclarator = false;
+				DeclaratorHasName = false;
+				ComplexDeclaratorDepth = 0;
+				Advance(Token, HasToken);
+				continue;
+			}
+			if (Value == TEXT(";"))
+			{
+				AppendDeclaratorName();
+				EmitVariable(Candidate, Type, {}, false);
+				Advance(Token, HasToken);
+				return;
+			}
+			if (Value == TEXT("{") && Candidate.Size() > 0)
+			{
+				String Initializer;
+				SkipBalanced(TEXT("{"), TEXT("}"), Token, HasToken, &Initializer);
+				EmitVariable(Candidate, Type, std::move(Initializer), false);
+				if (HasToken && Token.Value_Text == TEXT(";")) Advance(Token, HasToken);
+				return;
+			}
+			if (Value == TEXT("{"))
+			{
+				SkipBalanced(TEXT("{"), TEXT("}"), Token, HasToken);
+				return;
+			}
+			Advance(Token, HasToken);
 		}
 	}
 
-	void CppParser::Parse_FunctionTail(size_t Begin, size_t End, ParsedFunctionBase& Function, ParsedType* TrailingType, bool& IsTrailingType)
+	void CppParser::ParseParameters(Array<ParsedFunctionParameter>& Parameters, TextToken& Token, bool& HasToken)
 	{
-		for (size_t At = Begin; At < End; ++At)
+		while (HasToken && Token.Value_Text != TEXT(")"))
 		{
-			const String& Value = m_Tokens[At].Value_Text;
-			if (Value == TEXT("try"))
+			ParsedFunctionParameter& Parameter = Parameters.EmplaceRef();
+			if (Token.Value_Text == TEXT("...") || Token.Value_Text == TEXT("."))
 			{
-				Function.IsTryBlock = true;
+				Parameter.IsVariadic = ConsumeEllipsis(Token, HasToken);
 			}
-			else if (Value == TEXT(":") && !Function.HasInitializer)
+			else
 			{
-				size_t InitializerEnd = FindTopLevel(At + 1, End, TEXT("{"));
-				Function.HasInitializer = true;
-				Function.Initializer.Text = TokensToText(At + 1, InitializerEnd);
-				At = InitializerEnd > 0 ? InitializerEnd - 1 : InitializerEnd;
+				String Candidate;
+				while (HasToken && Token.Value_Text != TEXT(",") && Token.Value_Text != TEXT(")") && Token.Value_Text != TEXT("="))
+				{
+					const String Value = Token.Value_Text;
+					if (Value == TEXT("const")) AddFlag(Parameter.Type.Flags, EParsedTypeFlags::IsConst);
+					else if (Value == TEXT("volatile")) AddFlag(Parameter.Type.Flags, EParsedTypeFlags::IsVolatile);
+					else if (Value == TEXT("typename")) Parameter.Type.IsTypename = true;
+					else if (Value == TEXT("...") || Value == TEXT("."))
+					{
+						Parameter.IsTypePack = ConsumeEllipsis(Token, HasToken);
+						continue;
+					}
+					else if (Token.Type == ETextTokenType::Identifier)
+					{
+						if (Parameter.Type.Name.Segments.Size() == 0) AddNameSegment(Parameter.Type.Name, Value);
+						else if (Candidate.Size() == 0) Candidate = Value;
+						else
+						{
+							AddNameSegment(Parameter.Type.Name, Candidate);
+							Candidate = Value;
+						}
+					}
+					else if (Value == TEXT("*") || Value == TEXT("&") || Value == TEXT("&&"))
+					{
+						ParsedIndirection& Indirection = Parameter.Type.Indirections.EmplaceRef();
+						Indirection.Kind = Value == TEXT("*") ? ParsedIndirection::EKind::Pointer : Value == TEXT("&") ? ParsedIndirection::EKind::LReference : ParsedIndirection::EKind::RReference;
+					}
+					else if (Value == TEXT("<"))
+					{
+						if (Candidate.Size() > 0)
+						{
+							AddNameSegment(Parameter.Type.Name, Candidate);
+							Candidate.Clear();
+						}
+						String TemplateText;
+						SkipBalanced(TEXT("<"), TEXT(">"), Token, HasToken, &TemplateText);
+						if (Parameter.Type.Name.Segments.Size() > 0)
+						{
+							ParsedTemplateArgument& Argument = Parameter.Type.Name.Segments[Parameter.Type.Name.Segments.Size() - 1].TemplateArguments.EmplaceRef();
+							AddNameSegment(Argument.Type.Name, TemplateText.SubString(1, TemplateText.Size() > 1 ? TemplateText.Size() - 2 : 0));
+						}
+						continue;
+					}
+					else if (Value == TEXT("["))
+					{
+						Advance(Token, HasToken);
+						ParsedExpression& Extent = Parameter.Type.ArrayExtents.EmplaceRef();
+						ReadExpressionUntil(Extent.Text, TEXT("]"), {}, Token, HasToken);
+						Expect(TEXT("]"), Token, HasToken);
+						continue;
+					}
+					Advance(Token, HasToken);
+				}
+				if (Candidate.Size() > 0) AddNameSegment(Parameter.Name, Candidate);
+				if (HasToken && Token.Value_Text == TEXT("="))
+				{
+					Parameter.HasDefaultValue = true;
+					Advance(Token, HasToken);
+					ReadExpressionUntil(Parameter.DefaultValue.Text, TEXT(","), TEXT(")"), Token, HasToken);
+				}
 			}
-			else if (Value == TEXT("const") || Value == TEXT("volatile") || Value == TEXT("&") || Value == TEXT("&&") || Value == TEXT("override") || Value == TEXT("final"))
+			if (HasToken && Token.Value_Text == TEXT(",")) Advance(Token, HasToken);
+		}
+	}
+
+	void CppParser::ParseFunction(ParsedType ReturnType, const String& Name, bool IsDestructor, bool IsOperator, const String& OperatorSymbol,
+		EParsedFunctionFlags Flags, Array<ParsedAttribute>& Attributes, const String& ExplicitExpression, TextToken& Token, bool& HasToken)
+	{
+		Expect(TEXT("("), Token, HasToken);
+		ParsedFunction Function;
+		Function.ReturnType = std::move(ReturnType);
+		Function.Flags = Flags;
+		Function.Attributes = std::move(Attributes);
+		if (ExplicitExpression.Size() > 0)
+		{
+			Function.HasExplicitExpression = true;
+			Function.ExplicitExpression.Text = ExplicitExpression;
+		}
+		AddNameSegment(Function.Name, Name);
+		ParseParameters(Function.Parameters, Token, HasToken);
+		Expect(TEXT(")"), Token, HasToken);
+
+		while (HasToken && Token.Value_Text != TEXT(";") && Token.Value_Text != TEXT("{") && Token.Value_Text != TEXT("}"))
+		{
+			const String Value = Token.Value_Text;
+			if (Value == TEXT("const") || Value == TEXT("volatile") || Value == TEXT("&") || Value == TEXT("&&") || Value == TEXT("override") || Value == TEXT("final"))
 			{
 				Function.Qualifiers.Add(Value);
+				Advance(Token, HasToken);
 			}
 			else if (Value == TEXT("noexcept"))
 			{
 				AddFlag(Function.Flags, EParsedFunctionFlags::IsNoexcept);
-				if (At + 1 < End && m_Tokens[At + 1].Value_Text == TEXT("("))
+				Advance(Token, HasToken);
+				if (HasToken && Token.Value_Text == TEXT("("))
 				{
-					size_t Close = FindMatching(At + 1, TEXT("("), TEXT(")"));
-					Function.NoexceptExpression.Text = TokensToText(At + 2, Close);
-					At = Close;
+					Advance(Token, HasToken);
+					ReadExpressionUntil(Function.NoexceptExpression.Text, TEXT(")"), {}, Token, HasToken);
+					Expect(TEXT(")"), Token, HasToken);
 				}
 			}
-			else if (Value == TEXT("->") && TrailingType != nullptr)
+			else if (Value == TEXT("->"))
 			{
-				size_t TypeEnd = End;
-				for (size_t Scan = At + 1; Scan < End; ++Scan)
+				Function.IsTrailingType = true;
+				Function.ReturnType = {};
+				Advance(Token, HasToken);
+				if (HasToken && Token.Value_Text == TEXT("decltype"))
 				{
-					if (m_Tokens[Scan].Value_Text == TEXT("requires") || m_Tokens[Scan].Value_Text == TEXT("{") || m_Tokens[Scan].Value_Text == TEXT("="))
+					AddFlag(Function.ReturnType.Flags, EParsedTypeFlags::IsDecltype);
+					Advance(Token, HasToken);
+					if (HasToken && Token.Value_Text == TEXT("("))
 					{
-						TypeEnd = Scan;
-						break;
+						Advance(Token, HasToken);
+						ReadExpressionUntil(Function.ReturnType.Decltype.Text, TEXT(")"), {}, Token, HasToken);
+						Expect(TEXT(")"), Token, HasToken);
 					}
 				}
-				Parse_Type(At + 1, TypeEnd, *TrailingType);
-				IsTrailingType = true;
-				At = TypeEnd - 1;
+				while (HasToken && Token.Value_Text != TEXT("requires") && Token.Value_Text != TEXT("{") && Token.Value_Text != TEXT(";") && Token.Value_Text != TEXT("="))
+				{
+					if (Token.Type == ETextTokenType::Identifier) AddNameSegment(Function.ReturnType.Name, Token.Value_Text);
+					else if (Token.Value_Text == TEXT("*") || Token.Value_Text == TEXT("&") || Token.Value_Text == TEXT("&&"))
+					{
+						ParsedIndirection& Indirection = Function.ReturnType.Indirections.EmplaceRef();
+						Indirection.Kind = Token.Value_Text == TEXT("*") ? ParsedIndirection::EKind::Pointer : Token.Value_Text == TEXT("&") ? ParsedIndirection::EKind::LReference : ParsedIndirection::EKind::RReference;
+					}
+					Advance(Token, HasToken);
+				}
 			}
 			else if (Value == TEXT("requires"))
 			{
 				AddFlag(Function.Flags, EParsedFunctionFlags::HasRequires);
-				size_t RequiresEnd = End;
-				if ((static_cast<uint16>(Function.Flags) & static_cast<uint16>(EParsedFunctionFlags::HasBody)) != 0)
+				Advance(Token, HasToken);
+				if (HasToken && Token.Value_Text == TEXT("requires"))
 				{
-					RequiresEnd = FindTopLevel(At + 1, End, TEXT("{"));
+					AppendTokenText(Function.RequiresClause.Text, Token);
+					Advance(Token, HasToken);
+					if (HasToken && Token.Value_Text == TEXT("(")) SkipBalanced(TEXT("("), TEXT(")"), Token, HasToken, &Function.RequiresClause.Text);
+					if (HasToken && Token.Value_Text == TEXT("{")) SkipBalanced(TEXT("{"), TEXT("}"), Token, HasToken, &Function.RequiresClause.Text);
 				}
-				Function.RequiresClause.Text = TokensToText(At + 1, RequiresEnd);
-				At = RequiresEnd - 1;
+				else ReadExpressionUntil(Function.RequiresClause.Text, TEXT("{"), TEXT(";"), Token, HasToken);
 			}
-			else if (Value == TEXT("=") && At + 1 < End)
+			else if (Value == TEXT("try"))
 			{
-				if (m_Tokens[At + 1].Value_Text == TEXT("0"))
-				{
-					AddFlag(Function.Flags, EParsedFunctionFlags::IsPureVirtual);
-				}
-				else if (m_Tokens[At + 1].Value_Text == TEXT("default"))
-				{
-					AddFlag(Function.Flags, EParsedFunctionFlags::IsDefaulted);
-				}
-				else if (m_Tokens[At + 1].Value_Text == TEXT("delete"))
-				{
-					AddFlag(Function.Flags, EParsedFunctionFlags::IsDeleted);
-				}
+				Function.IsTryBlock = true;
+				Advance(Token, HasToken);
+			}
+			else if (Value == TEXT(":"))
+			{
+				Function.HasInitializer = true;
+				Advance(Token, HasToken);
+				ReadExpressionUntil(Function.Initializer.Text, TEXT("{"), {}, Token, HasToken);
+			}
+			else if (Value == TEXT("="))
+			{
+				Advance(Token, HasToken);
+				if (HasToken && Token.Value_Text == TEXT("0")) AddFlag(Function.Flags, EParsedFunctionFlags::IsPureVirtual);
+				else if (HasToken && Token.Value_Text == TEXT("default")) AddFlag(Function.Flags, EParsedFunctionFlags::IsDefaulted);
+				else if (HasToken && Token.Value_Text == TEXT("delete")) AddFlag(Function.Flags, EParsedFunctionFlags::IsDeleted);
+				if (HasToken) Advance(Token, HasToken);
+			}
+			else Advance(Token, HasToken);
+		}
+
+		if (HasToken && Token.Value_Text == TEXT("{"))
+		{
+			AddFlag(Function.Flags, EParsedFunctionFlags::HasBody);
+			SkipBalanced(TEXT("{"), TEXT("}"), Token, HasToken, &Function.Body.Text);
+			while (HasToken && Token.Value_Text == TEXT("catch"))
+			{
+				AppendTokenText(Function.Body.Text, Token);
+				Advance(Token, HasToken);
+				if (HasToken && Token.Value_Text == TEXT("(")) SkipBalanced(TEXT("("), TEXT(")"), Token, HasToken, &Function.Body.Text);
+				if (HasToken && Token.Value_Text == TEXT("{")) SkipBalanced(TEXT("{"), TEXT("}"), Token, HasToken, &Function.Body.Text);
 			}
 		}
+		else if (HasToken && Token.Value_Text == TEXT(";")) Advance(Token, HasToken);
+
+		if (IsOperator)
+		{
+			ParsedOperator Operator;
+			static_cast<ParsedFunction&>(Operator) = std::move(Function);
+			Operator.Symbol = OperatorSymbol;
+			OnParsed_Operator(Operator);
+		}
+		else if (IsDestructor)
+		{
+			ParsedDestructor Destructor;
+			static_cast<ParsedFunctionBase&>(Destructor) = std::move(static_cast<ParsedFunctionBase&>(Function));
+			OnParsed_Destructor(Destructor);
+		}
+		else if (CurrentClassName().Size() > 0 && Name == CurrentClassName())
+		{
+			ParsedConstructor Constructor;
+			static_cast<ParsedFunctionBase&>(Constructor) = std::move(static_cast<ParsedFunctionBase&>(Function));
+			OnParsed_Constructor(Constructor);
+		}
+		else OnParsed_Function(Function);
 	}
 
-	void CppParser::Parse_Variable(size_t Begin, size_t End, size_t NameAt, const ParsedType& BaseType, EParsedVariableFlags Flags)
+	void CppParser::ParseClosedClassDeclarators(const Scope& ClosedScope, TextToken& Token, bool& HasToken)
 	{
-		ParsedVariable Variable;
-		Variable.Type = BaseType;
-		Variable.Flags = Flags;
-		Variable.Attributes = std::move(m_PendingAttributes);
-		Parse_Name(NameAt, NameAt + 1, Variable.Name);
-		size_t DeclaratorBegin = FindDeclaratorTypeEnd(Begin, NameAt);
-		for (size_t At = DeclaratorBegin; At < NameAt; ++At)
-		{
-			const String& Value = m_Tokens[At].Value_Text;
-			if (Value == TEXT("*") || Value == TEXT("&") || Value == TEXT("&&"))
-			{
-				ParsedIndirection& Indirection = Variable.Type.Indirections.EmplaceRef();
-				Indirection.Kind = Value == TEXT("*") ? ParsedIndirection::EKind::Pointer : Value == TEXT("&") ? ParsedIndirection::EKind::LReference : ParsedIndirection::EKind::RReference;
-				while (At + 1 < NameAt && IsTypeQualifier(m_Tokens[At + 1].Value_Text))
-				{
-					++At;
-					if (m_Tokens[At].Value_Text == TEXT("const"))
-					{
-						Indirection.IsConst = true;
-					}
-					else if (m_Tokens[At].Value_Text == TEXT("volatile"))
-					{
-						Indirection.IsVolatile = true;
-					}
-				}
-			}
-		}
-		String Declarator = BuildDeclarator(DeclaratorBegin, End, NameAt);
-		bool IsComplexDeclarator = Declarator != TEXT("$") &&
-			((DeclaratorBegin < NameAt && m_Tokens[DeclaratorBegin].Value_Text == TEXT("(")) || FindTopLevel(DeclaratorBegin, End, TEXT("(")) < End);
-		if (IsComplexDeclarator)
-		{
-			Variable.Type.Declarator = std::move(Declarator);
-			Variable.Type.Indirections.Clear();
-			Variable.Type.ArrayExtents.Clear();
-		}
-		if (!IsComplexDeclarator)
-		{
-			size_t Bracket = FindTopLevel(NameAt + 1, End, TEXT("["));
-			while (Bracket < End)
-			{
-				size_t Close = FindMatching(Bracket, TEXT("["), TEXT("]"));
-				Variable.Type.ArrayExtents.EmplaceRef().Text = TokensToText(Bracket + 1, Close);
-				Bracket = FindTopLevel(Close + 1, End, TEXT("["));
-			}
-		}
-		size_t Equal = FindTopLevel(Begin, End, TEXT("="));
-		size_t Colon = FindTopLevel(Begin, End, TEXT(":"));
-		if (Colon < Equal)
-		{
-			Equal = Colon;
-			AddFlag(Variable.Flags, EParsedVariableFlags::IsBitfield);
-		}
-		if (Equal < End)
-		{
-			AddFlag(Variable.Flags, EParsedVariableFlags::HasInitializer);
-			Variable.Initializer.Text = TokensToText(Equal + 1, End);
-		}
-		OnParsed_Variable(Variable);
+		ParsedType Type = ClosedScope.DeclaredType;
+		if (ClosedScope.Name.Size() > 0) AddNameSegment(Type.Name, ClosedScope.Name);
+		else Type.ElaboratedType = ClosedScope.ElaboratedType;
+		ParseGeneral(Token, HasToken, std::move(Type), ClosedScope.VariableFlags);
 	}
 
 	String CppParser::CurrentClassName() const

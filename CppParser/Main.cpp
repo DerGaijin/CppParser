@@ -7,6 +7,8 @@ using namespace CE;
 #include <iostream>
 #include <sstream>
 
+#define USE_PRINT_PARSER 0
+
 struct ParserContext
 {
 	std::atomic<size_t> FileCounter = 0;
@@ -28,11 +30,15 @@ private:
 
 int main()
 {
-	//ParseManager<PrintParser> PM;
+#if USE_PRINT_PARSER
+	ParseManager<PrintParser> PM;
+#else
 	ParseManager<TempParser> PM;
-	PM.ParseSystemIncludes = false;
+#endif
+	PM.ParseSystemIncludes = true;
+	PM.CppStandard = ECppStandard::Cpp17;
 	PM.SetupEnvironment();
-#if 0
+#if 1
 	PM.AddFile("UnitTest.hpp");
 #else
 	PM.AddFile("Array.h");
@@ -58,9 +64,12 @@ int main()
 
 	try
 	{
+#if USE_PRINT_PARSER
+		PM.Run(ResultFile);
+#else
 		ParserContext Ctx;
-		//PM.Run(ResultFile);
 		PM.Run(Ctx);
+#endif
 	}
 	catch (const CE::TextTokenizerError& Error)
 	{
@@ -88,6 +97,8 @@ int main()
 	ResultFile.flush();
 	ResultFile.close();
 
+#if !USE_PRINT_PARSER
 	system("pause");
+#endif
 	return 0;
 }

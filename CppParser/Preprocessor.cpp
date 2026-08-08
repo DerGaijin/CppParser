@@ -332,11 +332,16 @@ namespace CE
 		return m_Tokenizer;
 	}
 
-	void Preprocessor::PushSubTokenizer(const std::filesystem::path& Path, const String& DefinitionName, SharedPtr<String> Text, const Array<WChar>& Whitespace)
+	void Preprocessor::PushSubTokenizer(const std::filesystem::path& Path, const String& DefinitionName, SharedPtr<String> Text,
+		const Array<WChar>& Whitespace, const TextToken* Origin)
 	{
 		SharedPtr<TextTokenizerInput_String> Input = SharedPtr<TextTokenizerInput_String>(new TextTokenizerInput_String(*Text));
 		SharedPtr<TextTokenizer> Tokenizer = SharedPtr<TextTokenizer>(new TextTokenizer(*Input, GetActiveTokenizer().Config));
-		m_SubTokenizers.EmplaceRef(SubTokenizer{ Path, DefinitionName, Text, Input, Tokenizer, Whitespace });
+		m_SubTokenizers.EmplaceRef(SubTokenizer{ Path, DefinitionName, Text, Input, Tokenizer, Whitespace,
+			Origin != nullptr ? Origin->Pos : 0,
+			Origin != nullptr ? Origin->Line : 0,
+			Origin != nullptr ? Origin->LinePos : 0,
+			Origin != nullptr });
 		if (!Path.empty())
 		{
 			OnParseBegin();
@@ -401,6 +406,13 @@ namespace CE
 					{
 						Token.Whitespaces.Insert(0, Sub.Whitespaces);
 						Sub.Whitespaces.Clear();
+					}
+					if (Sub.HasOrigin)
+					{
+						// Macro replacement text has no physical source position; report its invocation.
+						Token.Pos = Sub.OriginPos;
+						Token.Line = Sub.OriginLine;
+						Token.LinePos = Sub.OriginLinePos;
 					}
 				}
 
@@ -991,6 +1003,7 @@ namespace CE
 			{
 				if (Token.Value_Text == Definition.first)
 				{
+					const TextToken ExpansionOrigin = Token;
 					bool IsAlreadyExpanding = false;
 					for (auto& Sub : m_SubTokenizers)
 					{
@@ -1118,7 +1131,7 @@ namespace CE
 					}
 
 					SharedPtr<String> Text = SharedPtr<String>(new String(Definition.second.Resolve(Parameters)));
-					PushSubTokenizer("", Name, Text, Whitespaces);
+					PushSubTokenizer("", Name, Text, Whitespaces, &ExpansionOrigin);
 					TokenIsValid = false;
 					return true;
 				}

@@ -8,6 +8,12 @@
 
 namespace CE
 {
+	enum class ECppStandard : uint8
+	{
+		Cpp17,
+		Cpp20,
+	};
+
 	template<typename P = CppParser>
 	class ParseManager
 	{
@@ -56,8 +62,9 @@ namespace CE
 
 		void SetupEnvironment()
 		{
-			Definitions[L"__cplusplus"] = PreprocessorDefinition::Create({}, L"201703L");
-			Definitions[L"_MSVC_LANG"] = PreprocessorDefinition::Create({}, L"201703L");
+			const String LanguageVersion = CppStandard == ECppStandard::Cpp17 ? L"201703L" : L"202002L";
+			Definitions[L"__cplusplus"] = PreprocessorDefinition::Create({}, LanguageVersion);
+			Definitions[L"_MSVC_LANG"] = PreprocessorDefinition::Create({}, LanguageVersion);
 			Definitions[L"_MSC_VER"] = PreprocessorDefinition::Create({}, L"1944");
 			Definitions[L"_HAS_STATIC_RTTI"] = PreprocessorDefinition::Create({}, L"1");
 			Definitions[L"_M_IX86"] = PreprocessorDefinition::Create({}, L"600");
@@ -208,6 +215,7 @@ namespace CE
 
 
 	public:
+		ECppStandard CppStandard = ECppStandard::Cpp20;
 		bool ParseSystemIncludes = true;
 		Map<String, PreprocessorDefinition> Definitions;
 		Array<std::filesystem::path> IncludeDirectories;
