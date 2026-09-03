@@ -13,3 +13,6 @@
 
 # Open Code
 .opencode/
+
+# Test Files
+CppParser/Result.hpp
